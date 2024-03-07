@@ -13,25 +13,26 @@ from activephasemap.models.hybrid import update_npmodel
 from activephasemap.np.neural_process import NeuralProcess 
 from activephasemap.test_functions.phasemaps import SimulatorTestFunction
 from activephasemap.acquisitions.phaseboundary import PhaseBoundaryPenalty
-from activephasemap.utils.simulators import GNPPhases
+from activephasemap.utils.simulators import PeptideGNPPhases
 from activephasemap.utils.settings import *
 from activephasemap.utils.visuals import *
 
 BATCH_SIZE = 4
 N_INIT_POINTS = 5
 N_ITERATIONS = 10
-MODEL_NAME = "gp"
+TEMPERATURE = 35
+MODEL_NAME = "dkl"
 SIMULATOR = "goldnano"
-DATA_DIR = "./gold_nano_grid/"
+DATA_DIR = "./peptide_grid/%d"%TEMPERATURE
 PRETRAIN_LOC = "../pretrained/uvvis.pt"
 
-SAVE_DIR = './%s/'%MODEL_NAME
+SAVE_DIR = './%s_%d/'%(MODEL_NAME, TEMPERATURE)
 if os.path.exists(SAVE_DIR):
     shutil.rmtree(SAVE_DIR)
 os.makedirs(SAVE_DIR)
 print('Saving the results to %s'%SAVE_DIR)
 
-sim = GNPPhases(DATA_DIR)
+sim = PeptideGNPPhases(DATA_DIR)
 sim.generate()
 
 N_LATENT = 2
