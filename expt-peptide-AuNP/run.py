@@ -13,11 +13,11 @@ from activephasemap.models.hybrid import update_npmodel
 from activephasemap.np.neural_process import NeuralProcess 
 from activephasemap.test_functions.phasemaps import ExperimentalTestFunction
 from activephasemap.acquisitions.phaseboundary import PhaseBoundaryPenalty
-from activephasemap.utils.simulators import GNPPhases, PhaseMappingExperiment
+from activephasemap.utils.simulators import GNPPhases, UVVisExperiment
 from activephasemap.utils.settings import *
 from activephasemap.utils.visuals import *
 
-ITERATION = 0 # specify the current itereation number
+ITERATION = 1 # specify the current itereation number
 
 # hyper-parameters
 BATCH_SIZE = 4
@@ -101,7 +101,6 @@ def run_iteration(comps_all, spectra_all):
         )
 
     # calculate acquisition values after rounding
-    print(normalized_candidates)
     new_x = unnormalize(normalized_candidates.detach(), bounds=bounds) 
 
     torch.save(train_x.cpu(), SAVE_DIR+"train_x_%d.pt" %ITERATION)
@@ -118,10 +117,13 @@ if ITERATION == 0:
     comps_init = init_x.detach().cpu().numpy()
     np.save(EXPT_DATA_DIR+'comps_0.npy', comps_init)
 else: 
-    expt = PhaseMappingExperiment(ITERATION, EXPT_DATA_DIR)
+    expt = UVVisExperiment(ITERATION, EXPT_DATA_DIR)
     expt.generate()
     test_function = ExperimentalTestFunction(sim=expt, bounds=design_space_bounds)
-    expt.plot(PLOT_DIR+'train_spectra_%d.png'%ITERATION)
+    fig, ax = plt.subplots()
+    expt.plot(ax, design_space_bounds)
+    plt.savefig(PLOT_DIR+'train_spectra_%d.png'%ITERATION)
+    plt.close()
 
     # assemble data for surrogate model training  
     comps_all = test_function.sim.comps 
@@ -131,6 +133,7 @@ else:
     # obtain new set of compositions to synthesize and their spectra
     comps_new, gp_model, acquisition, train_x, pbp = run_iteration(comps_all, spectra_all)
     np.save(EXPT_DATA_DIR+'comps_%d.npy'%(ITERATION), comps_new)
+    print('Samples requested to synthesize : ', comps_new)
 
     plot_iteration(ITERATION, test_function, train_x, gp_model, np_model, acquisition, N_LATENT)
     plt.savefig(PLOT_DIR+'itr_%d.png'%ITERATION)

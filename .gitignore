@@ -162,5 +162,4 @@ cython_debug/
 
 # Custom files or folder ignore
 *.DS_Store
-*.pt
 *.pdf
