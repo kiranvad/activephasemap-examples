@@ -13,11 +13,11 @@ from activephasemap.models.hybrid import update_npmodel
 from activephasemap.np.neural_process import NeuralProcess 
 from activephasemap.test_functions.phasemaps import ExperimentalTestFunction
 from activephasemap.acquisitions.phaseboundary import PhaseBoundaryPenalty
-from activephasemap.utils.simulators import GNPPhases, PhaseMappingExperiment
+from activephasemap.utils.simulators import GNPPhases, UVVisExperiment
 from activephasemap.utils.settings import *
 from activephasemap.utils.visuals import *
 
-ITERATION = 2 # specify the current itereation number
+ITERATION = 4 # specify the current itereation number
 
 # hyper-parameters
 BATCH_SIZE = 4
@@ -42,11 +42,6 @@ if ITERATION==0:
 sim = GNPPhases(DATA_DIR)
 sim.generate()
 
-""" Set up pretrain NP model """
-# Specify the Neural Process model
-np_model = NeuralProcess(1, 1, 50, N_LATENT, 50).to(device)
-np_model.load_state_dict(torch.load(PRETRAIN_LOC, map_location=device))
-
 """ Set up design space bounds """
 input_dim = 2 # dimension of design space
 output_dim = N_LATENT
@@ -60,7 +55,7 @@ model_args = {"model":"gp",
 }
 
 """ Helper functions """
-def featurize_spectra(spectra_all):
+def featurize_spectra(np_model, spectra_all):
     """ Obtain latent space embedding from spectra.
     """
     num_samples, n_domain = spectra_all.shape
@@ -74,25 +69,31 @@ def featurize_spectra(spectra_all):
 
     return z  
 
-def run_iteration(comps_all, spectra_all):
+def run_iteration(test_function):
     """ Perform a single iteration of active phasemapping.
 
     helper function to run a single iteration given 
     all the compositions and spectra obtained so far. 
-
-    This function only takes in compositions and spectra collected
-    so far as input and makes use of other variables defined in this file.
-    This makes sure that we can run this function even on a fresh Hyak session.
     """
+    # assemble data for surrogate model training  
+    comps_all = test_function.sim.comps 
+    spectra_all = test_function.sim.spectra_normalized # use normalized spectra
+    print('Data shapes : ', comps_all.shape, spectra_all.shape)
+
+    # Specify the Neural Process model
+    np_model = NeuralProcess(1, 1, 50, N_LATENT, 50).to(device)
+    np_model.load_state_dict(torch.load(PRETRAIN_LOC, map_location=device))
+
     standard_bounds = torch.tensor([(float(1e-5), 1.0) for _ in range(input_dim)]).transpose(-1, -2).to(device)
     gp_model = initialize_model(MODEL_NAME, model_args, input_dim, output_dim, device) 
 
     train_x = torch.from_numpy(comps_all).to(device) 
-    train_y = featurize_spectra(spectra_all)
+    train_y = featurize_spectra(np_model, spectra_all)
     normalized_x = normalize(train_x, bounds)
     gp_model.fit_and_save(normalized_x, train_y)
+    torch.save(gp_model.state_dict(), SAVE_DIR+'gp_model_%d.pt'%ITERATION)
+
     acquisition = construct_acqf_by_model(gp_model, normalized_x, train_y, N_LATENT)
-    pbp = PhaseBoundaryPenalty(test_function, gp_model, np_model)
 
     normalized_candidates, acqf_values = optimize_acqf(
         acquisition, 
@@ -106,15 +107,15 @@ def run_iteration(comps_all, spectra_all):
         )
 
     # calculate acquisition values after rounding
-    print(normalized_candidates)
     new_x = unnormalize(normalized_candidates.detach(), bounds=bounds) 
 
     torch.save(train_x.cpu(), SAVE_DIR+"train_x_%d.pt" %ITERATION)
     torch.save(train_y.cpu(), SAVE_DIR+"train_y_%d.pt" %ITERATION)
+    data = ActiveLearningDataset(train_x,spectra_all)
+    np_model, np_loss = update_npmodel(test_function.sim.t, np_model, data, num_iterations=75, verbose=False)
     torch.save(np_model.state_dict(), SAVE_DIR+'np_model_%d.pt'%ITERATION)
-    torch.save(gp_model.state_dict(), SAVE_DIR+'gp_model_%d.pt'%ITERATION)
 
-    return new_x.cpu().numpy(), gp_model, acquisition, train_x, pbp
+    return new_x.cpu().numpy(), np_model, gp_model, acquisition, train_x
 
 def generate_spectra(sim, comps):
     "This functions mimics the UV-Vis characterization module run"
@@ -134,33 +135,30 @@ if ITERATION == 0:
     np.save(EXPT_DATA_DIR+'comps_0.npy', comps_init)
     np.save(EXPT_DATA_DIR+'wav.npy', sim.wl_)
     spectra = generate_spectra(sim, comps_init)
-    spectra.to_excel(EXPT_DATA_DIR+'spectra_%d.xlsx'%ITERATION, index=False)
+    np.save(EXPT_DATA_DIR+'spectra_%d.npy'%ITERATION, spectra)
 else: 
-    expt = PhaseMappingExperiment(ITERATION, EXPT_DATA_DIR)
+    expt = UVVisExperiment(ITERATION, EXPT_DATA_DIR)
     expt.generate()
     test_function = ExperimentalTestFunction(sim=expt, bounds=design_space_bounds)
-    expt.plot(PLOT_DIR+'train_spectra_%d.png'%ITERATION)
-
-    # assemble data for surrogate model training  
-    comps_all = test_function.sim.comps 
-    spectra_all = test_function.sim.spectra 
-    print('Data shapes : ', comps_all.shape, spectra_all.shape)
+    fig, ax = plt.subplots()
+    expt.plot(ax, design_space_bounds)
+    plt.savefig(PLOT_DIR+'train_spectra_%d.png'%ITERATION)
+    plt.close()
 
     # obtain new set of compositions to synthesize and their spectra
-    comps_new, gp_model, acquisition, train_x, pbp = run_iteration(comps_all, spectra_all)
+    comps_new, np_model, gp_model, acquisition, train_x = run_iteration(test_function)
     np.save(EXPT_DATA_DIR+'comps_%d.npy'%(ITERATION), comps_new)
     spectra = generate_spectra(sim, comps_new)
-    spectra.to_excel(EXPT_DATA_DIR+'spectra_%d.xlsx'%ITERATION, index=False)
+    np.save(EXPT_DATA_DIR+'spectra_%d.npy'%ITERATION, spectra)
 
     plot_iteration(ITERATION, test_function, train_x, gp_model, np_model, acquisition, N_LATENT)
     plt.savefig(PLOT_DIR+'itr_%d.png'%ITERATION)
     plt.close()
 
-    plot_gpmodel_expt(test_function, gp_model, np_model, PLOT_DIR+'gpmodel_itr_%d.png'%ITERATION)
-
-    plot_autophasemap(pbp, PLOT_DIR+'autphasemap_%d.png'%ITERATION)
+    plot_model_accuracy(PLOT_DIR, gp_model, np_model, test_function)
 
     fig, ax = plt.subplots(figsize=(4,4))
-    plot_gpmodel_grid(ax, test_function, gp_model, np_model,num_grid_spacing=10, color='k', show_sigma=True)
+    plot_gpmodel_grid(ax, test_function, gp_model, np_model,
+    num_grid_spacing=10, color='k', show_sigma=True, scale_axis=True)
     plt.savefig(PLOT_DIR+'predicted_phasemap_%d.png'%ITERATION)
     plt.close()
