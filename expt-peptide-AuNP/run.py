@@ -17,14 +17,13 @@ from activephasemap.utils.simulators import UVVisExperiment
 from activephasemap.utils.settings import *
 from activephasemap.utils.visuals import *
 
-ITERATION = 1 # specify the current itereation number
+ITERATION = 3 # specify the current itereation number
 
 # hyper-parameters
-BATCH_SIZE = 11
+BATCH_SIZE = 12
 MODEL_NAME = "gp"
 PRETRAIN_LOC = "../pretrained/uvvis.pt"
 N_LATENT = 2
-
 EXPT_DATA_DIR = "./data/"
 SAVE_DIR = "./output/"
 PLOT_DIR = "./plots/"
