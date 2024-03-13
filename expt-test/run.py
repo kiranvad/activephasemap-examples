@@ -11,6 +11,7 @@ from botorch.utils.transforms import normalize, unnormalize
 
 from activephasemap.models.hybrid import update_npmodel
 from activephasemap.np.neural_process import NeuralProcess 
+from activephasemap.np.utils import context_target_split
 from activephasemap.test_functions.phasemaps import ExperimentalTestFunction
 from activephasemap.acquisitions.phaseboundary import PhaseBoundaryPenalty
 from activephasemap.utils.simulators import GNPPhases, UVVisExperiment
@@ -55,19 +56,25 @@ model_args = {"model":"gp",
 }
 
 """ Helper functions """
-def featurize_spectra(np_model, spectra_all):
+def featurize_spectra(np_model, comps_all, spectra_all):
     """ Obtain latent space embedding from spectra.
     """
+    num_np_draws = 100
     num_samples, n_domain = spectra_all.shape
     spectra = torch.zeros((num_samples, n_domain)).to(device)
     for i, si in enumerate(spectra_all):
         spectra[i] = torch.tensor(si).to(device)
     t = torch.linspace(0, 1, n_domain)
     t = t.repeat(num_samples, 1).to(device)
-    with torch.no_grad():
-        z, _ = np_model.xy_to_mu_sigma(t.unsqueeze(2), spectra.unsqueeze(2)) 
+    train_x, train_y = [], []
+    for _ in range(num_np_draws):
+        with torch.no_grad():
+            train_x.append(comps_all)
+            x_context, y_context, _, _ = context_target_split(t.unsqueeze(2), spectra.unsqueeze(2), 25, 25)
+            z, _ = np_model.xy_to_mu_sigma(x_context, y_context) 
+            tranin_y.append(z)
 
-    return z  
+    return torch.cat(train_x), torch.cat(train_y) 
 
 def run_iteration(test_function):
     """ Perform a single iteration of active phasemapping.
