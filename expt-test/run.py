@@ -18,7 +18,7 @@ from activephasemap.utils.simulators import GNPPhases, UVVisExperiment
 from activephasemap.utils.settings import *
 from activephasemap.utils.visuals import *
 
-ITERATION = 1 # specify the current itereation number
+ITERATION = 5 # specify the current itereation number
 
 # hyper-parameters
 BATCH_SIZE = 4
@@ -29,6 +29,7 @@ SIMULATOR = "goldnano"
 DATA_DIR = "../AuNP/gold_nano_grid/"
 PRETRAIN_LOC = "../pretrained/uvvis.pt"
 N_LATENT = 2
+DESIGN_SPACE_DIM = 2
 
 EXPT_DATA_DIR = "./data/"
 SAVE_DIR = './output/'
@@ -44,14 +45,12 @@ sim = GNPPhases(DATA_DIR)
 sim.generate()
 
 """ Set up design space bounds """
-input_dim = 0 # dimension of design space
-output_dim = N_LATENT
 design_space_bounds = [(0.0, 7.38), (0.0,7.27)]
 bounds = torch.tensor(design_space_bounds).transpose(-1, -2).to(device)
 
 """ Create a GP model class for surrogate """
 model_args = {"model":"gp",
-"num_epochs" : 2000,
+"num_epochs" : 1000,
 "learning_rate" : 1e-3
 }
 
@@ -91,8 +90,8 @@ def run_iteration(test_function):
     np_model = NeuralProcess(1, 1, 50, N_LATENT, 50).to(device)
     np_model.load_state_dict(torch.load(PRETRAIN_LOC, map_location=device))
 
-    standard_bounds = torch.tensor([(float(1e-5), 1.0) for _ in range(input_dim)]).transpose(-1, -2).to(device)
-    gp_model = initialize_model(MODEL_NAME, model_args, input_dim, output_dim, device) 
+    standard_bounds = torch.tensor([(float(1e-5), 1.0) for _ in range(DESIGN_SPACE_DIM)]).transpose(-1, -2).to(device)
+    gp_model = initialize_model(MODEL_NAME, model_args, DESIGN_SPACE_DIM, N_LATENT, device) 
 
     train_x, train_y = featurize_spectra(np_model, comps_all, spectra_all)
     normalized_x = normalize(train_x, bounds)
@@ -118,7 +117,8 @@ def run_iteration(test_function):
     torch.save(train_x.cpu(), SAVE_DIR+"train_x_%d.pt" %ITERATION)
     torch.save(train_y.cpu(), SAVE_DIR+"train_y_%d.pt" %ITERATION)
     data = ActiveLearningDataset(train_x,spectra_all)
-    np_model, np_loss = update_npmodel(test_function.sim.t, np_model, data, num_iterations=75, verbose=False)
+    np_model, np_loss = update_npmodel(test_function.sim.t, np_model, data, 
+    num_iterations=75, verbose=True, print_freq=1)
     torch.save(np_model.state_dict(), SAVE_DIR+'np_model_%d.pt'%ITERATION)
 
     return new_x.cpu().numpy(), np_model, gp_model, acquisition, train_x
@@ -157,7 +157,8 @@ else:
     spectra = generate_spectra(sim, comps_new)
     np.save(EXPT_DATA_DIR+'spectra_%d.npy'%ITERATION, spectra)
 
-    plot_iteration(ITERATION, test_function, train_x, gp_model, np_model, acquisition, N_LATENT)
+    fig, axs = plot_iteration(ITERATION, test_function, test_function.sim.comps, gp_model, np_model, acquisition, N_LATENT)
+    axs['A2'].scatter(comps_new[:,0], comps_new[:,1],color='k')
     plt.savefig(PLOT_DIR+'itr_%d.png'%ITERATION)
     plt.close()
 

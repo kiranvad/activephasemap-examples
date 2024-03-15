@@ -27,6 +27,7 @@ N_LATENT = 2
 EXPT_DATA_DIR = "./data/"
 SAVE_DIR = "./output/"
 PLOT_DIR = "./plots/"
+DESIGN_SPACE_DIM = 2
 
 if ITERATION==0:
     for direc in [EXPT_DATA_DIR, SAVE_DIR, PLOT_DIR]:
@@ -35,8 +36,6 @@ if ITERATION==0:
         os.makedirs(direc)
 
 """ Set up design space bounds """
-input_dim = 2 # dimension of design space
-output_dim = N_LATENT
 design_space_bounds = [(0.0, 87.0), (0.0,11.0)]
 bounds = torch.tensor(design_space_bounds).transpose(-1, -2).to(device)
 
@@ -47,19 +46,25 @@ model_args = {"model":"gp",
 }
 
 """ Helper functions """
-def featurize_spectra(np_model, spectra_all):
+def featurize_spectra(np_model, comps_all, spectra_all):
     """ Obtain latent space embedding from spectra.
     """
+    num_draws = 25
     num_samples, n_domain = spectra_all.shape
     spectra = torch.zeros((num_samples, n_domain)).to(device)
     for i, si in enumerate(spectra_all):
         spectra[i] = torch.tensor(si).to(device)
     t = torch.linspace(0, 1, n_domain)
     t = t.repeat(num_samples, 1).to(device)
-    with torch.no_grad():
-        z, _ = np_model.xy_to_mu_sigma(t.unsqueeze(2), spectra.unsqueeze(2)) 
+    train_x, train_y = [], []
+    for _ in range(num_draws):
+        with torch.no_grad():
+            train_x.append(torch.from_numpy(comps_all).to(device))
+            x_context, y_context, _, _ = context_target_split(t.unsqueeze(2), spectra.unsqueeze(2), 25, 25)
+            z, _ = np_model.xy_to_mu_sigma(x_context, y_context) 
+            train_y.append(z)
 
-    return z  
+    return torch.cat(train_x), torch.cat(train_y) 
 
 def run_iteration(test_function):
     """ Perform a single iteration of active phasemapping.
@@ -76,11 +81,10 @@ def run_iteration(test_function):
     np_model = NeuralProcess(1, 1, 50, N_LATENT, 50).to(device)
     np_model.load_state_dict(torch.load(PRETRAIN_LOC, map_location=device))
 
-    standard_bounds = torch.tensor([(float(1e-5), 1.0) for _ in range(input_dim)]).transpose(-1, -2).to(device)
-    gp_model = initialize_model(MODEL_NAME, model_args, input_dim, output_dim, device) 
+    standard_bounds = torch.tensor([(float(1e-5), 1.0) for _ in range(DESIGN_SPACE_DIM)]).transpose(-1, -2).to(device)
+    gp_model = initialize_model(MODEL_NAME, model_args, DESIGN_SPACE_DIM, N_LATENT, device) 
 
-    train_x = torch.from_numpy(comps_all).to(device) 
-    train_y = featurize_spectra(np_model, spectra_all)
+    train_x, train_y = featurize_spectra(np_model, comps_all, spectra_all)
     normalized_x = normalize(train_x, bounds)
     gp_model.fit_and_save(normalized_x, train_y)
     torch.save(gp_model.state_dict(), SAVE_DIR+'gp_model_%d.pt'%ITERATION)
@@ -128,7 +132,7 @@ else:
     comps_new, np_model, gp_model, acquisition, train_x = run_iteration(test_function)
     np.save(EXPT_DATA_DIR+'comps_%d.npy'%(ITERATION), comps_new)
 
-    fig, axs = plot_iteration(ITERATION, test_function, train_x, gp_model, np_model, acquisition, N_LATENT)
+    fig, axs = plot_iteration(ITERATION, test_function, test_function.sim.comps, gp_model, np_model, acquisition, N_LATENT)
     axs['A2'].scatter(comps_new[:,0], comps_new[:,1], marker='x', color='k')
     plt.savefig(PLOT_DIR+'itr_%d.png'%ITERATION)
     plt.close()
@@ -137,6 +141,6 @@ else:
 
     fig, ax = plt.subplots(figsize=(4,4))
     plot_gpmodel_grid(ax, test_function, gp_model, np_model,
-    num_grid_spacing=10, color='k', show_sigma=True)
+    num_grid_spacing=10, color='k', show_sigma=True, scale_axis=True)
     plt.savefig(PLOT_DIR+'predicted_phasemap_%d.png'%ITERATION)
     plt.close()
