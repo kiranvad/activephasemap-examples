@@ -57,8 +57,8 @@ with torch.no_grad():
 
 optimizer = torch.optim.Adam(neuralprocess.parameters(), lr=learning_rate)
 np_trainer = NeuralProcessTrainer(device, neuralprocess, optimizer,
-                                  num_context_range=(num_context, num_context),
-                                  num_extra_target_range=(num_target, num_target), 
+                                  num_context_range=(10, 80),
+                                  num_extra_target_range=(20, 90), 
                                   print_freq=100)
 
 neuralprocess.training = True
