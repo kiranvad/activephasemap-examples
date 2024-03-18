@@ -163,3 +163,4 @@ cython_debug/
 # Custom files or folder ignore
 *.DS_Store
 *.pdf
+/pretrained/uvvis_data_npy/*
