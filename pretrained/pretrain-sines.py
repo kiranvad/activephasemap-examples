@@ -8,12 +8,12 @@ from torch.utils.data.dataloader import default_collate
 from torch.utils.data import DataLoader
 from activephasemap.np.neural_process import NeuralProcess
 from activephasemap.np.training import NeuralProcessTrainer
-from activephasemap.np.utils import context_target_split
+from activephasemap.np.datasets import SineData
 
 sys.path.append('./helpers.py')
 from helpers import *
 
-PLOT_DIR = './UVVis/'
+PLOT_DIR = './SINES/'
 if os.path.exists(PLOT_DIR):
     shutil.rmtree(PLOT_DIR)
 os.makedirs(PLOT_DIR)
@@ -22,15 +22,17 @@ print('Saving the results to %s'%PLOT_DIR)
 
 batch_size = 2
 num_epochs = 10
-r_dim = 128  # Dimension of representation of context points
+r_dim = 50  # Dimension of representation of context points
 z_dim = 2  # Dimension of sampled latent variable
-h_dim = 128  # Dimension of hidden layers in encoder and decoder
+h_dim = 50  # Dimension of hidden layers in encoder and decoder
 learning_rate = 1e-3
-plot_epochs_freq = 4
+plot_epochs_freq = 2
 print_itr_freq = 1000
 
 # Create dataset
-dataset = UVVisDataset(root_dir='./uvvis_data_npy')
+dataset = SineData(amplitude_range=(-1., 1.),
+                   shift_range=(-.5, .5),
+                   num_samples=2000)
 data_loader = DataLoader(dataset, batch_size=batch_size, shuffle=True,
 collate_fn=lambda x: tuple(x_.to(device) for x_ in default_collate(x))
 )
@@ -48,7 +50,11 @@ neuralprocess = NeuralProcess(1, 1, r_dim, z_dim, h_dim).to(device)
 # Create a set of 100 target points, with shape 
 # (batch_size, num_points, x_dim), which in this case is
 # (1, 100, 1)
-x_target = torch.linspace(dataset.xrange[0], dataset.xrange[1], 100).reshape(1,100,1).to(device)
+x_target = torch.linspace(dataset.xrange[0], 
+                          dataset.xrange[1], 100
+                          ).reshape(1,100,1).to(device)
+
+
 with torch.no_grad():
     fig, ax = plt.subplots()
     plot_samples(ax, neuralprocess, x_target, z_dim)
@@ -57,13 +63,19 @@ with torch.no_grad():
 
 optimizer = torch.optim.Adam(neuralprocess.parameters(), lr=learning_rate)
 np_trainer = NeuralProcessTrainer(device, neuralprocess, optimizer,
-                                  num_context_range=(25, 65),
-                                  num_extra_target_range=(10, 35), 
+                                  num_context_range=(3, 50),
+                                  num_extra_target_range=(1, 50), 
                                   print_freq=print_itr_freq)
 
 neuralprocess.training = True
-x_plot = torch.linspace(dataset.xrange[0], dataset.xrange[1], steps = 100).reshape(1,100,1).to(device)
-np_trainer.train(data_loader, num_epochs, x_plot=x_plot, plot_epoch=plot_epochs_freq, savedir=PLOT_DIR+'/itrs/') 
+x_plot = torch.linspace(dataset.xrange[0], 
+                        dataset.xrange[1], steps = 100
+                        ).reshape(1,100,1).to(device)
+
+np_trainer.train(data_loader, num_epochs, x_plot=x_plot, 
+                 plot_epoch=plot_epochs_freq, 
+                 savedir=PLOT_DIR+'/itrs/'
+                 ) 
 
 neuralprocess.training = False
 
@@ -89,5 +101,3 @@ with torch.no_grad():
         plot_zgrid_curves([-5,5], x_target, neuralprocess)
         plt.savefig(PLOT_DIR+'samples_in_grid.png')
         plt.close()
-
-# torch.save(neuralprocess.state_dict(), 'uvvis.pt')
