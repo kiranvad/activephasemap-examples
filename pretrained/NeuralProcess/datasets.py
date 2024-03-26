@@ -3,6 +3,8 @@ import collections
 import gpytorch
 import torch
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+torch.set_default_dtype(torch.double)
+import glob 
 
 # The (A)NP takes as input a `NPRegressionDescription` namedtuple with fields:
 #   `query`: a tuple containing ((context_x, context_y), target_x)
@@ -199,4 +201,27 @@ class GaussianProcess(NPRegressionDataset):
         x_values = self.x.repeat(self.batch_size, 1).reshape(*self.shape)
         y_values = dist.rsample(torch.Size([self.batch_size])).reshape(*self.shape)
 
-        return self.process(x_values, y_values)
+        return self.process(x_values, y_values) 
+
+
+class UVVis(NPRegressionDataset):
+    def __init__(self, root_dir, max_num_context=50, batch_size=8, testing=False):
+        self.dir = root_dir
+        self.files = glob.glob(self.dir+'/*.npz')
+        super().__init__(max_num_context, batch_size, testing)
+
+    def sample(self):
+        rids = np.random.randint(len(self.files), size=self.batch_size)
+        x_values, y_values = [], []
+        for i in rids:
+            npzfile = np.load(self.files[i])
+            wl, I = npzfile['wl'], npzfile['I']
+            wl = (wl-min(wl))/(max(wl)-min(wl))
+            x_values.append(torch.from_numpy(wl)) 
+            y_values.append(torch.from_numpy(I))
+            
+        # shape [batch_size, num_points, 1]
+        x_values = torch.stack(x_values, dim=0).unsqueeze(-1).to(device)
+        y_values = torch.stack(y_values, dim=0).unsqueeze(-1).to(device)
+
+        return self.process(x_values, y_values) 
