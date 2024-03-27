@@ -10,27 +10,26 @@ from activephasemap.np.neural_process import NeuralProcess
 from activephasemap.np.training import NeuralProcessTrainer
 from activephasemap.np.utils import context_target_split
 
-sys.path.append('./helpers.py')
+sys.path.append('/mmfs1/home/kiranvad/kiranvad/activephasemap-examples/pretrained/')
 from helpers import *
 
-PLOT_DIR = './UVVis/'
+PLOT_DIR = './plots/'
 if os.path.exists(PLOT_DIR):
     shutil.rmtree(PLOT_DIR)
 os.makedirs(PLOT_DIR)
-os.makedirs(PLOT_DIR+'/itrs/')
-print('Saving the results to %s'%PLOT_DIR)
+os.makedirs(PLOT_DIR+'itrs/')
 
-batch_size = 2
-num_epochs = 10
+batch_size = 16
+num_epochs = 1000
 r_dim = 128  # Dimension of representation of context points
 z_dim = 2  # Dimension of sampled latent variable
 h_dim = 128  # Dimension of hidden layers in encoder and decoder
 learning_rate = 1e-3
-plot_epochs_freq = 4
+plot_epochs_freq = 100
 print_itr_freq = 1000
 
 # Create dataset
-dataset = UVVisDataset(root_dir='./uvvis_data_npy')
+dataset = UVVisDataset(root_dir='../uvvis_data_npy')
 data_loader = DataLoader(dataset, batch_size=batch_size, shuffle=True,
 collate_fn=lambda x: tuple(x_.to(device) for x_ in default_collate(x))
 )
@@ -57,8 +56,8 @@ with torch.no_grad():
 
 optimizer = torch.optim.Adam(neuralprocess.parameters(), lr=learning_rate)
 np_trainer = NeuralProcessTrainer(device, neuralprocess, optimizer,
-                                  num_context_range=(25, 65),
-                                  num_extra_target_range=(10, 35), 
+                                  num_context_range=(3, 47),
+                                  num_extra_target_range=(50, 53), 
                                   print_freq=print_itr_freq)
 
 neuralprocess.training = True
@@ -66,10 +65,12 @@ x_plot = torch.linspace(dataset.xrange[0], dataset.xrange[1], steps = 100).resha
 np_trainer.train(data_loader, num_epochs, x_plot=x_plot, plot_epoch=plot_epochs_freq, savedir=PLOT_DIR+'/itrs/') 
 
 neuralprocess.training = False
-
+np.save(PLOT_DIR+'loss.npy', np_trainer.epoch_loss_history) 
 with torch.no_grad():
     fig, ax = plt.subplots()
-    ax.plot(np.arange(num_epochs), np_trainer.epoch_loss_history)
+    n_smooth = 10
+    loss_ = np.convolve(np_trainer.epoch_loss_history, np.ones(n_smooth)/n_smooth, mode='valid')
+    ax.plot(np.arange(len(loss_)), loss_)
     plt.savefig(PLOT_DIR+'loss.png')
     plt.close()
 
