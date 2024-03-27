@@ -13,7 +13,7 @@ from activephasemap.models.anp import NeuralProcessModel
 from activephasemap.models.utils import update_anp
 from activephasemap.test_functions.phasemaps import ExperimentalTestFunction
 from activephasemap.utils.simulators import GNPPhases, UVVisExperiment 
-from activephasemap.utils.settings import initialize_points, initialize_model
+from activephasemap.utils.settings import initialize_points, initialize_model, construct_acqf_by_model
 
 from helpers import *
 
@@ -24,15 +24,17 @@ ITR = collections.namedtuple(
     ("num","new_x", "np_model", "np_loss", "gp_model", "gp_loss", "acquisition", "train_x", "train_y"))
 
 # hyper-parameters
-BATCH_SIZE = 4
-N_INIT_POINTS = 5
-N_ITERATIONS = 10
-MODEL_NAME = "gp"
-SIMULATOR = "goldnano"
-DATA_DIR = "../AuNP/gold_nano_grid/"
-PRETRAIN_LOC = "../pretrained/ANP/uvvis_anp.pt"
-N_LATENT = 2
-DESIGN_SPACE_DIM = 2
+hyper_params = {"batch_size" : 4,
+"n_init_poitns" : 5,
+"n_iterations" : 10,
+"model_name" : "gp",
+"simulator" : "goldnano",
+"data_dir" : "../AuNP/gold_nano_grid/",
+"pretrain_loc" : "../pretrained/ANP/uvvis_anp.pt",
+"rep_dim" : 4,
+"latent_dim" : 2,
+"design_space_dim" : 2
+} 
 
 EXPT_DATA_DIR = "./data/"
 SAVE_DIR = './output/'
@@ -45,7 +47,7 @@ if ITERATION==0:
         os.makedirs(direc)
 
 # setup a simulator to use as a proxy for experiment
-sim = GNPPhases(DATA_DIR)
+sim = GNPPhases(hyper_params["data_dir"])
 sim.generate()
 
 """ Set up design space bounds """
@@ -77,14 +79,12 @@ def featurize_spectra(np_model, comps_all, spectra_all):
             r = np_model.r_encoder(context_x, context_y, target_x)
             q_target = np_model.z_encoder(target_x, target_y)
             z = q_target.rsample()
-            z = z.unsqueeze(1).repeat(1,target_x.size(1),1)
-            rz = torch.cat([r,z], dim=-1)
+            rz = torch.cat([r.mean(dim=1),z], dim=-1)
             train_y.append(rz)
-            print(rz.shape)
 
     return torch.cat(train_x), torch.cat(train_y) 
 
-def run_iteration(test_function):
+def run_iteration(test_function, hyper_params):
     """ Perform a single iteration of active phasemapping.
 
     helper function to run a single iteration given 
@@ -96,23 +96,24 @@ def run_iteration(test_function):
     print('Data shapes : ', comps_all.shape, spectra_all.shape)
 
     # Specify the Neural Process model
-    np_model = NeuralProcessModel(4, 2, attn_type="multihead").to(device)
-    np_model.load_state_dict(torch.load(PRETRAIN_LOC, map_location=device))
+    np_model = NeuralProcessModel(hyper_params["rep_dim"], hyper_params["latent_dim"], attn_type="multihead").to(device)
+    np_model.load_state_dict(torch.load(hyper_params["pretrain_loc"], map_location=device))
 
-    standard_bounds = torch.tensor([(float(1e-5), 1.0) for _ in range(DESIGN_SPACE_DIM)]).transpose(-1, -2).to(device)
-    gp_model = initialize_model(MODEL_NAME, model_args, DESIGN_SPACE_DIM, N_LATENT, device) 
+    standard_bounds = torch.tensor([(float(1e-5), 1.0) for _ in range(hyper_params["design_space_dim"])]).transpose(-1, -2).to(device)
+    n_latent = hyper_params["rep_dim"]+hyper_params["latent_dim"]
+    gp_model = initialize_model(hyper_params["model_name"],model_args, hyper_params["design_space_dim"], n_latent, device) 
 
     train_x, train_y = featurize_spectra(np_model, comps_all, spectra_all)
     normalized_x = normalize(train_x, bounds)
     gp_loss = gp_model.fit_and_save(normalized_x, train_y)
     torch.save(gp_model.state_dict(), SAVE_DIR+'gp_model_%d.pt'%ITERATION)
 
-    acquisition = construct_acqf_by_model(gp_model, normalized_x, train_y, N_LATENT)
+    acquisition = construct_acqf_by_model(gp_model, normalized_x, train_y, n_latent)
 
     normalized_candidates, acqf_values = optimize_acqf(
         acquisition, 
         standard_bounds, 
-        q=BATCH_SIZE, 
+        q=hyper_params["batch_size"], 
         num_restarts=20, 
         raw_samples=1024, 
         return_best_only=True,
@@ -134,9 +135,9 @@ def run_iteration(test_function):
     np_loss = np_loss,
     gp_model = gp_model, 
     gp_loss = gp_loss,
-    acquisiton = acquisition, 
+    acquisition = acquisition, 
     train_x = train_x,
-    train_y = train_y
+    train_y = train_y,
     )
 
 def generate_spectra(sim, comps):
@@ -168,13 +169,13 @@ else:
     plt.close()
 
     # obtain new set of compositions to synthesize and their spectra
-    itr = run_iteration(test_function)
+    itr = run_iteration(test_function, hyper_params)
     comps_new = itr.new_x
     np.save(EXPT_DATA_DIR+'comps_%d.npy'%(ITERATION), comps_new)
     spectra = generate_spectra(sim, comps_new)
     np.save(EXPT_DATA_DIR+'spectra_%d.npy'%ITERATION, spectra)
 
-    fig, axs = plot_iteration(itr, test_function)
+    fig, axs = plot_iteration(itr, test_function, hyper_params)
     axs['A2'].scatter(comps_new[:,0], comps_new[:,1],color='k')
     plt.savefig(PLOT_DIR+'itr_%d.png'%ITERATION)
     plt.close()

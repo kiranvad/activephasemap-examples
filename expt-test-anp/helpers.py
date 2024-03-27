@@ -9,9 +9,12 @@ from matplotlib import colormaps
 from matplotlib.cm import ScalarMappable
 
 import torch 
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
 from botorch.utils.transforms import normalize, unnormalize
 from activephasemap.utils.settings import get_twod_grid
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+from activephasemap.utils.visuals import _inset_spectra, MinMaxScaler, scaled_tickformat
+
 
 def get_contex_target(x,y, max_num_context):
     x_ = x.to(device)
@@ -29,7 +32,7 @@ def get_contex_target(x,y, max_num_context):
 
 
 
-def from_comp_to_spectrum(test_function, gp_model, np_model, c):
+def from_comp_to_spectrum(test_function, gp_model, np_model, c, rep_dim):
     with torch.no_grad():
         t_ = test_function.sim.t
         t = torch.from_numpy(t_).to(device)
@@ -41,8 +44,9 @@ def from_comp_to_spectrum(test_function, gp_model, np_model, c):
         posterior = gp_model.posterior(normalized_x)
 
         rzc = posterior.rsample()
-        rc, zc = rzc[:rep_dim, ...], rzc[rep_dim:,...]
-        dist = np_model.decoder(rx, zc, t)
+        rc, zc = rzc[:, :, :rep_dim], rzc[:, :, rep_dim:]
+        pdb.set_trace()
+        dist = np_model.decoder(rc, zc, t)
 
         return dist.loc, dist.scale
 
@@ -60,7 +64,8 @@ def plot_gpmodel_grid(ax, test_function, itr, **kwargs):
         for i in range(num_grid_spacing):
             for j in range(num_grid_spacing):
                 ci = np.array([c1[i], c2[j]]).reshape(1, 2)
-                mu, sigma = from_comp_to_spectrum(test_function, itr.gp_model, itr.np_model, ci)
+                rep_dim = kwargs.pop("np_rep_dim", 6)
+                mu, sigma = from_comp_to_spectrum(test_function, itr.gp_model, itr.np_model, ci, rep_dim)
                 mu_ = mu.cpu().squeeze().numpy()
                 sigma_ = sigma.cpu().squeeze().numpy()
                 norm_ci = np.array([scaler_x.transform(c1[i]), scaler_y.transform(c2[j])])
@@ -70,7 +75,7 @@ def plot_gpmodel_grid(ax, test_function, itr, **kwargs):
 
     return 
     
-def plot_iteration(itr, test_function):
+def plot_iteration(itr, test_function, hyper_params):
     layout = [['A1','A2', 'C', 'C'], 
               ['B1', 'B2', 'C', 'C']
               ]
@@ -118,7 +123,7 @@ def plot_iteration(itr, test_function):
     axs['B1'].set_ylabel('NP-Loss') 
     axs['B1'].set_title('NP')
 
-    plot_gpmodel_grid(axs['C'], test_function, itr, show_sigma=False)
+    plot_gpmodel_grid(axs['C'], test_function, itr, np_rep_dim=hyper_params["rep_dim"], show_sigma=False)
 
     return fig, axs
 
