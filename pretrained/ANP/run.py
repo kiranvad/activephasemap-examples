@@ -62,6 +62,8 @@ for itr in range(TRAINING_ITERATIONS):
             plt.savefig(PLOT_DIR+'itr_%d.png'%itr)
             plt.close()
 
+torch.save(model.state_dict(), 'uvvis_anp.pt')
+
 np.save(PLOT_DIR+'loss.npy', loss_history)            
 loss_ = np.convolve(loss_history, np.ones(PLOT_AFTER)/PLOT_AFTER, mode='valid')
 fig, ax = plt.subplots()

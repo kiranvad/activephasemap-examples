@@ -1,0 +1,11 @@
+SLURM_JOBID=17415094
+SLURM_JOB_NODELIST=g3005
+SLURM_NNODES=1
+SLURMTMPDIR=
+working directory = /mmfs1/gscratch/scrubbed/kiranvad/activephasemap-examples/pretrained/UVVis
+python from the following environment
+/mmfs1/home/kiranvad/kiranvad/envs/activephasemap/bin/python
+working directory = 
+/mmfs1/gscratch/scrubbed/kiranvad/activephasemap-examples/pretrained/UVVis
+Launch Python job
+All Done!

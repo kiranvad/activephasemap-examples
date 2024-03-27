@@ -1,0 +1,11 @@
+SLURM_JOBID=17415103
+SLURM_JOB_NODELIST=g3003
+SLURM_NNODES=1
+SLURMTMPDIR=
+working directory = /mmfs1/gscratch/scrubbed/kiranvad/activephasemap-examples/pretrained/ANP
+python from the following environment
+/mmfs1/home/kiranvad/kiranvad/envs/activephasemap/bin/python
+working directory = 
+/mmfs1/gscratch/scrubbed/kiranvad/activephasemap-examples/pretrained/ANP
+Launch Python job
+All Done!

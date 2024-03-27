@@ -58,14 +58,16 @@ optimizer = torch.optim.Adam(neuralprocess.parameters(), lr=learning_rate)
 np_trainer = NeuralProcessTrainer(device, neuralprocess, optimizer,
                                   num_context_range=(3, 47),
                                   num_extra_target_range=(50, 53), 
-                                  print_freq=print_itr_freq)
+                                  print_freq=print_itr_freq
+                                  )
 
 neuralprocess.training = True
 x_plot = torch.linspace(dataset.xrange[0], dataset.xrange[1], steps = 100).reshape(1,100,1).to(device)
 np_trainer.train(data_loader, num_epochs, x_plot=x_plot, plot_epoch=plot_epochs_freq, savedir=PLOT_DIR+'/itrs/') 
+torch.save(neuralprocess.state_dict(), 'uvvis_np.pt')
+np.save(PLOT_DIR+'loss.npy', np_trainer.epoch_loss_history) 
 
 neuralprocess.training = False
-np.save(PLOT_DIR+'loss.npy', np_trainer.epoch_loss_history) 
 with torch.no_grad():
     fig, ax = plt.subplots()
     n_smooth = 10
@@ -91,4 +93,3 @@ with torch.no_grad():
         plt.savefig(PLOT_DIR+'samples_in_grid.png')
         plt.close()
 
-# torch.save(neuralprocess.state_dict(), 'uvvis.pt')

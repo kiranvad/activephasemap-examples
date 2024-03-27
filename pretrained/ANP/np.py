@@ -208,7 +208,7 @@ class NeuralProcessModel(nn.Module):
             kl_loss = kl_divergence(q_target, q_context)
             kl_loss = torch.sum(kl_loss, dim=-1, keepdim=True)
             kl_loss = kl_loss.repeat(1, num_targets).unsqueeze(-1)
-            loss = -torch.mean((log_likelihood - kl_loss))
+            loss = -torch.mean((log_likelihood - kl_loss)/num_targets)
             
             return dist, log_likelihood, kl_loss, loss
         else:
