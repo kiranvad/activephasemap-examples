@@ -1,4 +1,4 @@
-import os, sys, time, shutil, pdb
+import os, sys, time, shutil, pdb, argparse
 from datetime import datetime
 import numpy as np
 import pandas as pd
@@ -10,7 +10,7 @@ torch.set_default_dtype(torch.double)
 from botorch.optim import optimize_acqf
 from botorch.utils.transforms import normalize, unnormalize
 
-from activephasemap.models.hybrid import update_npmodel
+from activephasemap.models.utils import update_np
 from activephasemap.np.neural_process import NeuralProcess 
 from activephasemap.np.utils import context_target_split
 from activephasemap.test_functions.phasemaps import ExperimentalTestFunction
@@ -18,7 +18,13 @@ from activephasemap.utils.simulators import GNPPhases, UVVisExperiment
 from activephasemap.utils.settings import *
 from activephasemap.utils.visuals import *
 
-ITERATION = 5 # specify the current itereation number
+parser = argparse.ArgumentParser(
+                    prog='Train emulator of gold nanoparticle synthesis',
+                    description='Perform a single iteration of active learning of Models 1 and 2',
+                    epilog='...')
+parser.add_argument('iteration', metavar='i', type=int, help='iterations number for the campaign')
+args = parser.parse_args()
+ITERATION = args.iteration # specify the current itereation number
 
 # hyper-parameters
 BATCH_SIZE = 4
@@ -27,7 +33,7 @@ N_ITERATIONS = 10
 MODEL_NAME = "gp"
 SIMULATOR = "goldnano"
 DATA_DIR = "../AuNP/gold_nano_grid/"
-PRETRAIN_LOC = "../pretrained/uvvis.pt"
+PRETRAIN_LOC = "../pretrained/UVVis/uvvis_np.pt"
 N_LATENT = 2
 DESIGN_SPACE_DIM = 2
 
@@ -48,11 +54,11 @@ sim.generate()
 design_space_bounds = [(0.0, 7.38), (0.0,7.27)]
 bounds = torch.tensor(design_space_bounds).transpose(-1, -2).to(device)
 
-""" Create a GP model class for surrogate """
-model_args = {"model":"gp",
-"num_epochs" : 1000,
-"learning_rate" : 1e-3
-}
+# you'd have to adjust the learning, number of iterations for early stopping 
+# Optimizing GP hyper-parameters is a highly non-trivial case so you need to chose the 
+# optimization algorithm parameters carefully.
+gp_model_args = {"model":"gp", "num_epochs" : 1300, "learning_rate" : 1e-3, "verbose": 1}
+np_model_args = {"num_iterations": 100, "verbose":True, "print_freq":100, "lr":5e-4}
 
 """ Helper functions """
 def featurize_spectra(np_model, comps_all, spectra_all):
@@ -87,15 +93,16 @@ def run_iteration(test_function):
     print('Data shapes : ', comps_all.shape, spectra_all.shape)
 
     # Specify the Neural Process model
-    np_model = NeuralProcess(1, 1, 50, N_LATENT, 50).to(device)
+    np_model = NeuralProcess(1, 1, 128, N_LATENT, 128).to(device)
     np_model.load_state_dict(torch.load(PRETRAIN_LOC, map_location=device))
 
     standard_bounds = torch.tensor([(float(1e-5), 1.0) for _ in range(DESIGN_SPACE_DIM)]).transpose(-1, -2).to(device)
-    gp_model = initialize_model(MODEL_NAME, model_args, DESIGN_SPACE_DIM, N_LATENT, device) 
+    gp_model = initialize_model(MODEL_NAME, gp_model_args, DESIGN_SPACE_DIM, N_LATENT, device) 
 
     train_x, train_y = featurize_spectra(np_model, comps_all, spectra_all)
     normalized_x = normalize(train_x, bounds)
-    gp_model.fit_and_save(normalized_x, train_y)
+    gp_loss = gp_model.fit(normalized_x, train_y)
+    np.save(SAVE_DIR+'gp_loss_%d.npy'%ITERATION, gp_loss)
     torch.save(gp_model.state_dict(), SAVE_DIR+'gp_model_%d.pt'%ITERATION)
 
     acquisition = construct_acqf_by_model(gp_model, normalized_x, train_y, N_LATENT)
@@ -117,11 +124,11 @@ def run_iteration(test_function):
     torch.save(train_x.cpu(), SAVE_DIR+"train_x_%d.pt" %ITERATION)
     torch.save(train_y.cpu(), SAVE_DIR+"train_y_%d.pt" %ITERATION)
     data = ActiveLearningDataset(train_x,spectra_all)
-    np_model, np_loss = update_npmodel(test_function.sim.t, np_model, data, 
-    num_iterations=75, verbose=True, print_freq=1)
+    np_model, np_loss = update_np(test_function.sim.t, np_model, data, **np_model_args)
     torch.save(np_model.state_dict(), SAVE_DIR+'np_model_%d.pt'%ITERATION)
+    np.save(SAVE_DIR+'np_loss_%d.npy'%ITERATION, np_loss)
 
-    return new_x.cpu().numpy(), np_model, gp_model, acquisition, train_x
+    return new_x.cpu().numpy(), np_loss, np_model, gp_loss, gp_model, acquisition, train_x
 
 def generate_spectra(sim, comps):
     "This functions mimics the UV-Vis characterization module run"
@@ -136,7 +143,7 @@ def generate_spectra(sim, comps):
 
 # Set up a synthetic data emulating an experiment
 if ITERATION == 0:
-    init_x = initialize_points(bounds, N_INIT_POINTS, output_dim, device)
+    init_x = initialize_points(bounds, N_INIT_POINTS, device)
     comps_init = init_x.detach().cpu().numpy()
     np.save(EXPT_DATA_DIR+'comps_0.npy', comps_init)
     np.save(EXPT_DATA_DIR+'wav.npy', sim.wl_)
@@ -152,10 +159,16 @@ else:
     plt.close()
 
     # obtain new set of compositions to synthesize and their spectra
-    comps_new, np_model, gp_model, acquisition, train_x = run_iteration(test_function)
+    comps_new, np_loss, np_model, gp_loss, gp_model, acquisition, train_x = run_iteration(test_function)
     np.save(EXPT_DATA_DIR+'comps_%d.npy'%(ITERATION), comps_new)
     spectra = generate_spectra(sim, comps_new)
     np.save(EXPT_DATA_DIR+'spectra_%d.npy'%ITERATION, spectra)
+
+    fig, axs = plt.subplots(1,2,figsize=(2*4, 4))
+    axs[0].plot(np.arange(len(gp_loss)), gp_loss)
+    axs[1].plot(np.arange(len(np_loss)), np_loss)  
+    plt.savefig(PLOT_DIR+'loss_%d.png'%ITERATION)
+    plt.close()      
 
     fig, axs = plot_iteration(ITERATION, test_function, test_function.sim.comps, gp_model, np_model, acquisition, N_LATENT)
     axs['A2'].scatter(comps_new[:,0], comps_new[:,1],color='k')
@@ -167,5 +180,6 @@ else:
     fig, ax = plt.subplots(figsize=(4,4))
     plot_gpmodel_grid(ax, test_function, gp_model, np_model,
     num_grid_spacing=10, color='k', show_sigma=True, scale_axis=True)
+    plt.tight_layout()
     plt.savefig(PLOT_DIR+'predicted_phasemap_%d.png'%ITERATION)
     plt.close()
