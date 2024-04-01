@@ -10,6 +10,7 @@ from botorch.utils.sampling import draw_sobol_samples
 torch.set_default_dtype(torch.double)
 from botorch.utils.transforms import normalize, unnormalize
 from torch.distributions import Normal
+from torchmin import minimize
 
 from activephasemap.np.neural_process import NeuralProcess 
 from activephasemap.np.utils import context_target_split
@@ -18,7 +19,6 @@ from activephasemap.utils.settings import initialize_model
 
 gp_model_args = {"model":"gp", "num_epochs" : 1, "learning_rate" : 1e-3, "verbose": 1}
 np_model_args = {"num_iterations": 100, "verbose":True, "print_freq":100, "lr":5e-4}
-LEARNING_RATE = 0.5
 TRAINING_ITERATIONS = 50
 DATA_DIR = './output'
 ITERATION = 5
@@ -45,53 +45,44 @@ NP = NeuralProcess(1, 1, 128, 2, 128).to(device)
 NP.load_state_dict(torch.load(DATA_DIR+'/np_model_%d.pt'%ITERATION, map_location=device)) 
 NP.train(False)
 
-class Model(torch.nn.Module):
-    def __init__(self, bounds):
-        super().__init__()
-        self.bounds = bounds
-        self.constraint = Interval(bounds[0,:], bounds[1,:])
-        init_param = draw_sobol_samples(bounds=bounds, n=1, q=1).to(device)
-        self.param = torch.nn.Parameter(init_param, requires_grad=True)
+def simulator(c, mode=None):
+    normalized_x = normalize(c, bounds)
+    posterior = GP.posterior(normalized_x.reshape(1,-1)) 
+    y_samples = []
+    for _ in range(250):
+        z = posterior.rsample().squeeze(0)
+        y, _ = NP.xz_to_y(xt, z)
+        y_samples.append(y)
 
-    def forward(self, xt, yt, gp, np):
-        normalized_c = torch.sigmoid(self.param)
-        unnormalized_c = self.constraint.transform(normalized_c)
-        print(self.param.data, normalized_c, unnormalized_c)
-        posterior = gp.posterior(normalized_c.reshape(1,-1)) 
-        y_samples = []
-        for _ in range(250):
-            z = posterior.rsample().squeeze(0)
-            y, _ = np.xz_to_y(xt, z)
-            y_samples.append(y)
+    mu = torch.cat(y_samples).mean(dim=0, keepdim=True)
+    sigma = torch.cat(y_samples).std(dim=0, keepdim=True)
 
-        mu = torch.cat(y_samples).mean(dim=0, keepdim=True)
-        sigma = torch.cat(y_samples).std(dim=0, keepdim=True)
-        dist = Normal(mu, sigma)
-        loss = dist.log_prob(yt).mean()
+    if mode is None:
+        loss = torch.nn.functional.mse_loss(mu, yt)
 
-        return unnormalized_c, mu, sigma, loss         
+        return loss
+    else:
+        return mu, sigma
 
+C0 = draw_sobol_samples(bounds=bounds, n=1, q=1).to(device)
 
-model = Model(bounds).to(device)
-model.train()
+res = minimize(
+    simulator, C0, 
+    method='newton-cg', 
+    options=dict(line_search='strong-wolfe'),
+    max_iter=TRAINING_ITERATIONS,
+    disp=2
+)
+print('final x: {}'.format(res.x))
 
-optim = torch.optim.SGD(model.parameters(), lr=LEARNING_RATE, momentum=0.9)
-
-for itr in range(TRAINING_ITERATIONS):
-    optim.zero_grad()
-    c_opt, mu, sigma, loss = model.forward(xt, yt, GP, NP)
-    loss.backward()
-    optim.step()
-    print("Iteration %d, loss : %.4f and current best estimate : "%(itr, loss.item()), c_opt.data)
-
-model.eval()
 with torch.no_grad():
     fig, ax = plt.subplots()
     ax.plot(sim.t, target, label="Target")
+    mu, sigma = simulator(res.x, mode="compute")
     mu = mu.cpu().squeeze().numpy()
     sigma = sigma.cpu().squeeze().numpy()
     ax.plot(sim.t, mu, label="Best Estimate")
     ax.fill_between(sim.t,mu-sigma,mu+sigma,  color='grey', alpha=0.5, label="Uncertainity")
     ax.legend()
-    plt.savefig("retrosynthesize_target.png")
+    plt.savefig("./plots/retrosynthesize_target.png")
     plt.show()
