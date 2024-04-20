@@ -96,8 +96,11 @@ def run_iteration(test_function):
     np_model = NeuralProcess(1, 1, 128, N_LATENT, 128).to(device)
     np_model.load_state_dict(torch.load(PRETRAIN_LOC, map_location=device))
 
-    standard_bounds = torch.tensor([(float(1e-5), 1.0) for _ in range(DESIGN_SPACE_DIM)]).transpose(-1, -2).to(device)
-    gp_model = initialize_model(MODEL_NAME, gp_model_args, DESIGN_SPACE_DIM, N_LATENT, device) 
+    np_model, np_loss = update_np(test_function.sim.t, spectra_all, np_model, **np_model_args)
+    torch.save(np_model.state_dict(), SAVE_DIR+'np_model_%d.pt'%ITERATION)
+    np.save(SAVE_DIR+'np_loss_%d.npy'%ITERATION, np_loss)
+
+    gp_model = initialize_model(gp_model_args, DESIGN_SPACE_DIM, N_LATENT, device) 
 
     train_x, train_y = featurize_spectra(np_model, comps_all, spectra_all)
     normalized_x = normalize(train_x, bounds)
@@ -106,7 +109,7 @@ def run_iteration(test_function):
     torch.save(gp_model.state_dict(), SAVE_DIR+'gp_model_%d.pt'%ITERATION)
 
     acquisition = construct_acqf_by_model(gp_model, normalized_x, train_y, N_LATENT)
-
+    standard_bounds = torch.tensor([(float(1e-5), 1.0) for _ in range(DESIGN_SPACE_DIM)]).transpose(-1, -2).to(device)
     normalized_candidates, acqf_values = optimize_acqf(
         acquisition, 
         standard_bounds, 
@@ -123,10 +126,6 @@ def run_iteration(test_function):
 
     torch.save(train_x.cpu(), SAVE_DIR+"train_x_%d.pt" %ITERATION)
     torch.save(train_y.cpu(), SAVE_DIR+"train_y_%d.pt" %ITERATION)
-    data = ActiveLearningDataset(train_x,spectra_all)
-    np_model, np_loss = update_np(test_function.sim.t, np_model, data, **np_model_args)
-    torch.save(np_model.state_dict(), SAVE_DIR+'np_model_%d.pt'%ITERATION)
-    np.save(SAVE_DIR+'np_loss_%d.npy'%ITERATION, np_loss)
 
     return new_x.cpu().numpy(), np_loss, np_model, gp_loss, gp_model, acquisition, train_x
 
@@ -146,12 +145,12 @@ if ITERATION == 0:
     init_x = initialize_points(bounds, N_INIT_POINTS, device)
     comps_init = init_x.detach().cpu().numpy()
     np.save(EXPT_DATA_DIR+'comps_0.npy', comps_init)
-    np.save(EXPT_DATA_DIR+'wav.npy', sim.wl_)
+    np.save(EXPT_DATA_DIR+'wav.npy', sim.wl)
     spectra = generate_spectra(sim, comps_init)
     np.save(EXPT_DATA_DIR+'spectra_%d.npy'%ITERATION, spectra)
 else: 
     expt = UVVisExperiment(ITERATION, EXPT_DATA_DIR)
-    expt.generate()
+    expt.generate(use_spline=True)
     test_function = ExperimentalTestFunction(sim=expt, bounds=design_space_bounds)
     fig, ax = plt.subplots()
     expt.plot(ax, design_space_bounds)
