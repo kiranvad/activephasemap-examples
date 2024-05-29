@@ -164,4 +164,4 @@ cython_debug/
 *.DS_Store
 *.pdf
 *.zip
-pretrained/uvvis_data_npy/
+pretrained/UVVis/uvvis_data_npy/

@@ -10,10 +10,14 @@ from botorch.utils.sampling import draw_sobol_samples
 torch.set_default_dtype(torch.double)
 from botorch.utils.transforms import normalize, unnormalize
 from torch.distributions import Normal
-from torchmin import minimize
 
-from activephasemap.np.neural_process import NeuralProcess 
-from activephasemap.np.utils import context_target_split
+# import minimize function from https://github.com/rfeinman/pytorch-minimize
+from torchmin import minimize
+# import Amplitude-Phase distance from https://github.com/kiranvad/Amplitude-Phase-Distance/tree/funcshape
+from apdist.torch import AmplitudePhaseDistance as apdist
+
+from activephasemap.models.np.neural_process import NeuralProcess 
+from activephasemap.models.np.utils import context_target_split
 from activephasemap.utils.simulators import GNPPhases
 from activephasemap.utils.settings import initialize_model 
 
@@ -21,7 +25,7 @@ gp_model_args = {"model":"gp", "num_epochs" : 1, "learning_rate" : 1e-3, "verbos
 np_model_args = {"num_iterations": 100, "verbose":True, "print_freq":100, "lr":5e-4}
 TRAINING_ITERATIONS = 50
 DATA_DIR = './output'
-ITERATION = 5
+ITERATION = 8
 N_LATENT = 2
 DESIGN_SPACE_DIM = 2
 
@@ -34,10 +38,9 @@ xt = torch.from_numpy(sim.t).to(device).view(1, num_samples, 1)
 yt = torch.from_numpy(target).to(device).view(1, num_samples, 1) 
 train_x = torch.load(DATA_DIR+'/train_x_%d.pt'%ITERATION, map_location=device)
 train_y = torch.load(DATA_DIR+'/train_y_%d.pt'%ITERATION, map_location=device)
-GP = initialize_model("gp", gp_model_args, DESIGN_SPACE_DIM, N_LATENT, device)
 normalized_x = normalize(train_x, bounds).to(train_x)
+GP = initialize_model(normalized_x, train_y, gp_model_args, DESIGN_SPACE_DIM, N_LATENT, device)
 gp_state_dict = torch.load(DATA_DIR+'/gp_model_%d.pt'%ITERATION, map_location=device)
-GP.fit(normalized_x, train_y)
 GP.load_state_dict(gp_state_dict)
 GP.train(False)
 
@@ -59,9 +62,30 @@ def simulator(c, mode=None):
 
     if mode is None:
         loss = torch.nn.functional.mse_loss(mu, yt)
+        # optim_kwargs = {"n_iters":50, 
+        #                 "n_basis":15, 
+        #                 "n_layers":15,
+        #                 "domain_type":"linear",
+        #                 "basis_type":"palais",
+        #                 "n_restarts":50,
+        #                 "lr":1e-1,
+        #                 "n_domain":num_samples
+        #                 }
+        
+        # amplitude, phase, _ = apdist(xt.squeeze(), 
+        #                              yt.squeeze(), 
+        #                              mu.squeeze(), 
+        #                              **optim_kwargs
+        #                              )
+        # loss = amplitude+phase
+        if torch.isnan(loss):
+            torch.save([xt, yt, mu],"./check_apdist_nan.pt")
+
+        print("Current amplitude-phase distance : ", loss.item())
 
         return loss
     else:
+
         return mu, sigma
 
 C0 = draw_sobol_samples(bounds=bounds, n=1, q=1).to(device)

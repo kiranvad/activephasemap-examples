@@ -5,7 +5,7 @@ from torch.utils.data import Dataset
 RNG = np.random.default_rng()
 import glob, pdb
 import matplotlib.pyplot as plt
-from activephasemap.np.utils import context_target_split
+from activephasemap.models.np.utils import context_target_split
 from activephasemap.utils.visuals import _inset_spectra, MinMaxScaler, scaled_tickformat
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
