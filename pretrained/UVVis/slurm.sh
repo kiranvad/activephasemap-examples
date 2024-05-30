@@ -1,9 +1,8 @@
 #!/bin/bash
 
 #SBATCH --account=cheme
-#SBATCH --partition=ckpt
-#SBATCH --nodes=1
-#SBATCH --gpus-per-node=1
+#SBATCH --partition=compute
+#SBATCH --nodes=4
 #SBATCH --time=02:00:00
 #SBATCH --output=./slurm/%j.out
 #SBATCH --error=./slurm/%j.err
@@ -22,7 +21,7 @@ echo "working directory = "$SLURM_SUBMIT_DIR
 cd $SLURM_SUBMIT_DIR
 
 eval "$(conda shell.bash hook)"
-conda activate mlmr
+conda activate activephasemap
 echo "python from the following virtualenv"
 which python
 echo "working directory = "

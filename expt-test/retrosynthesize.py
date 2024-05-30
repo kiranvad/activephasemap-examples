@@ -14,7 +14,7 @@ from torch.distributions import Normal
 # import minimize function from https://github.com/rfeinman/pytorch-minimize
 from torchmin import minimize
 # import Amplitude-Phase distance from https://github.com/kiranvad/Amplitude-Phase-Distance/tree/funcshape
-from apdist.torch import AmplitudePhaseDistance as apdist
+from funcshape.functions import Function, SRSF, get_warping_function
 
 from activephasemap.models.np.neural_process import NeuralProcess 
 from activephasemap.models.np.utils import context_target_split
@@ -31,8 +31,9 @@ DESIGN_SPACE_DIM = 2
 
 design_space_bounds = [(0.0, 7.38), (0.0,7.27)]
 bounds = torch.tensor(design_space_bounds).transpose(-1, -2).to(device)
-sim = GNPPhases("../AuNP/gold_nano_grid/") 
-target = sim.simulate(np.array([0.0, 4.4])) 
+sim = GNPPhases("../AuNP/gold_nano_grid/")
+target_comp = np.array([0.0, 4.4])
+target = sim.simulate(target_comp) 
 num_samples = target.shape[0]
 xt = torch.from_numpy(sim.t).to(device).view(1, num_samples, 1)
 yt = torch.from_numpy(target).to(device).view(1, num_samples, 1) 
@@ -47,6 +48,36 @@ GP.train(False)
 NP = NeuralProcess(1, 1, 128, 2, 128).to(device)
 NP.load_state_dict(torch.load(DATA_DIR+'/np_model_%d.pt'%ITERATION, map_location=device)) 
 NP.train(False)
+
+def amplitude_phase_distance(t, f1, f2, **kwargs):
+    """Define Amplitude-Phase distance as the loss function. 
+    
+    """
+    t = (t-min(t))/(max(t)-min(t))
+    f1 = Function(t, f1.reshape(-1,1))
+    f2 = Function(t, f2.reshape(-1,1))
+
+    with torch.no_grad():
+        warping, network, error = get_warping_function(f1, f2, **kwargs) 
+
+    q1, q2 = SRSF(f1), SRSF(f2)
+    delta = q1.qx-q2.qx
+    if delta.sum() == 0:
+        amplitude, phase = torch.Tensor([0.0]), torch.Tensor([0.0])
+    else:
+        network.project()
+        gam_dev = network.derivative(t.unsqueeze(-1), h=None)
+        q_gamma = q2(t)
+        term1 = q1.qx.squeeze()
+        term2 = q_gamma.squeeze() * torch.sqrt(gam_dev).squeeze()
+        y = (term1 - term2) ** 2
+
+        amplitude = torch.sqrt(torch.trapezoid(y, t))
+
+        theta = torch.trapezoid(torch.sqrt(gam_dev).squeeze(), x=t)
+        phase = torch.arccos(torch.clamp(theta, -1, 1))
+
+    return amplitude, phase, [warping, network, error]
 
 def simulator(c, mode=None):
     normalized_x = normalize(c, bounds)
@@ -72,16 +103,16 @@ def simulator(c, mode=None):
         #                 "n_domain":num_samples
         #                 }
         
-        # amplitude, phase, _ = apdist(xt.squeeze(), 
-        #                              yt.squeeze(), 
-        #                              mu.squeeze(), 
-        #                              **optim_kwargs
-        #                              )
+        # amplitude, phase, _ = amplitude_phase_distance(xt.squeeze(), 
+        #                                                mu.squeeze(), 
+        #                                                yt.squeeze(),
+        #                                                **optim_kwargs
+        #                                                )
         # loss = amplitude+phase
-        if torch.isnan(loss):
-            torch.save([xt, yt, mu],"./check_apdist_nan.pt")
+        # if torch.isnan(loss):
+        #     torch.save([xt, yt, mu],"./check_apdist_nan.pt")
 
-        print("Current amplitude-phase distance : ", loss.item())
+        print("Current loss value : %2.4f"%loss.item())
 
         return loss
     else:
@@ -98,7 +129,7 @@ res = minimize(
     disp=2
 )
 print('final x: {}'.format(res.x))
-
+print("Target composition : ", target_comp)
 with torch.no_grad():
     fig, ax = plt.subplots()
     ax.plot(sim.t, target, label="Target")

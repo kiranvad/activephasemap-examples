@@ -102,7 +102,7 @@ def train_np(config):
                             collate_fn=lambda x: tuple(x_.to(device) for x_ in default_collate(x))
                             )
     x_plot = torch.linspace(dataset.xrange[0], dataset.xrange[1], steps = 100).reshape(1,100,1).to(device)
-    np_trainer.train(data_loader, 1000, x_plot=x_plot, plot_epoch=100, savedir=PLOT_DIR) 
+    np_trainer.train(data_loader, 500, x_plot=x_plot, plot_epoch=50, savedir=PLOT_DIR) 
     torch.save(neuralprocess.state_dict(), SAVE_DIR+'model.pt')
     np.save(PLOT_DIR+'loss.npy', np_trainer.epoch_loss_history) 
 
@@ -128,7 +128,7 @@ def main(num_samples=10, max_num_epochs=10):
     tuner = tune.Tuner(
         tune.with_resources(
             tune.with_parameters(train_np),
-            resources={"cpu": 40, "gpu": 1}
+            resources={"cpu": 40, "gpu": 0}
         ),
         tune_config=tune.TuneConfig(
             metric="loss",

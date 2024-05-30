@@ -25,7 +25,7 @@ args = parser.parse_args()
 ITERATION = args.iteration # specify the current itereation number
 print("Running iteration %d"%ITERATION)
 # hyper-parameters
-BATCH_SIZE = 96
+BATCH_SIZE = 87
 N_INIT_POINTS = 72
 PRETRAIN_LOC = "../uvvis_np.pt"
 N_LATENT = 2
@@ -92,7 +92,7 @@ def run_iteration(expt):
     np_model.load_state_dict(torch.load(PRETRAIN_LOC, map_location=device))
     
     # train np model to update its latent representation based on the new data
-    np_model, np_loss = update_np(test_function.sim.t, spectra_all, np_model, **np_model_args)
+    np_model, np_loss = update_np(expt.t, spectra_all, np_model, **np_model_args)
     torch.save(np_model.state_dict(), SAVE_DIR+'np_model_%d.pt'%ITERATION)
     np.save(SAVE_DIR+'np_loss_%d.npy'%ITERATION, np_loss)
 
@@ -102,7 +102,7 @@ def run_iteration(expt):
     # train GP model given updated latent rep of np model
     normalized_x = normalize(train_x, bounds)
     gp_model = initialize_model(normalized_x, train_y, gp_model_args, DESIGN_SPACE_DIM, N_LATENT, device) 
-    gp_loss = gp_model.fit(normalized_x, train_y)
+    gp_loss = gp_model.fit()
     np.save(SAVE_DIR+'gp_loss_%d.npy'%ITERATION, gp_loss)
     torch.save(gp_model.state_dict(), SAVE_DIR+'gp_model_%d.pt'%ITERATION)
 
@@ -146,7 +146,7 @@ else:
 
     # obtain new set of compositions to synthesize and their spectra
     comps_new, np_loss, np_model, gp_loss, gp_model, acquisition, train_x = run_iteration(expt)
-    # np.save(EXPT_DATA_DIR+'comps_%d.npy'%(ITERATION), comps_new)
+    np.save(EXPT_DATA_DIR+'comps_%d.npy'%(ITERATION), comps_new)
 
     fig, axs = plt.subplots(1,2, figsize=(4*2, 4))
     axs[0].plot(np.arange(len(gp_loss)), gp_loss)

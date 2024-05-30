@@ -47,7 +47,7 @@ bounds = torch.tensor(design_space_bounds).transpose(-1, -2).to(device)
 # you'd have to adjust the learning, number of iterations for early stopping 
 # Optimizing GP hyper-parameters is a highly non-trivial case so you need to chose the 
 # optimization algorithm parameters carefully.
-gp_model_args = {"model":"gp", "num_epochs" : 1200, "learning_rate" : 1e-3, "verbose": 1}
+gp_model_args = {"model":"gp", "num_epochs" : 1000, "learning_rate" : 1e-3, "verbose": 1}
 np_model_args = {"num_iterations": 2000, "verbose":True, "print_freq":100, "lr":1e-3}
 
 """ Helper functions """
@@ -86,14 +86,14 @@ def run_iteration(expt):
     np_model = NeuralProcess(1, 1, 128, N_LATENT, 128).to(device)
     np_model.load_state_dict(torch.load(PRETRAIN_LOC, map_location=device))
 
-    np_model, np_loss = update_np(test_function.sim.t, spectra_all, np_model, **np_model_args)
+    np_model, np_loss = update_np(expt.t, spectra_all, np_model, **np_model_args)
     torch.save(np_model.state_dict(), SAVE_DIR+'np_model_%d.pt'%ITERATION)
     np.save(SAVE_DIR+'np_loss_%d.npy'%ITERATION, np_loss)
 
     train_x, train_y = featurize_spectra(np_model, comps_all, spectra_all)
     normalized_x = normalize(train_x, bounds)
     gp_model = initialize_model(normalized_x, train_y, gp_model_args, DESIGN_SPACE_DIM, N_LATENT, device) 
-    gp_loss = gp_model.fit(normalized_x, train_y)
+    gp_loss = gp_model.fit()
     np.save(SAVE_DIR+'gp_loss_%d.npy'%ITERATION, gp_loss)
     torch.save(gp_model.state_dict(), SAVE_DIR+'gp_model_%d.pt'%ITERATION)
 
@@ -126,7 +126,7 @@ if ITERATION == 0:
     print("Compositions selected at itereation %d\n"%ITERATION, comps_init)
     np.save(EXPT_DATA_DIR+'comps_0.npy', comps_init)
 else: 
-    expt = UVVisExperiment(ITERATION, EXPT_DATA_DIR)
+    expt = UVVisExperiment(bounds, ITERATION, EXPT_DATA_DIR)
     expt.generate(use_spline=True)
 
     fig, ax = plt.subplots()
@@ -136,7 +136,7 @@ else:
 
     # obtain new set of compositions to synthesize and their spectra
     comps_new, np_loss, np_model, gp_loss, gp_model, acquisition, train_x = run_iteration(expt)
-    # np.save(EXPT_DATA_DIR+'comps_%d.npy'%(ITERATION), comps_new)
+    np.save(EXPT_DATA_DIR+'comps_%d.npy'%(ITERATION), comps_new)
 
     fig, axs = plt.subplots(1,2,figsize=(2*4, 4))
     axs[0].plot(np.arange(len(gp_loss)), gp_loss)
