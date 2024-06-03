@@ -22,21 +22,24 @@ from activephasemap.utils.simulators import GNPPhases
 from activephasemap.utils.settings import initialize_model 
 
 gp_model_args = {"model":"gp", "num_epochs" : 1, "learning_rate" : 1e-3, "verbose": 1}
-np_model_args = {"num_iterations": 100, "verbose":True, "print_freq":100, "lr":5e-4}
 TRAINING_ITERATIONS = 50
 DATA_DIR = './output'
-ITERATION = 8
+ITERATION = 5
 N_LATENT = 2
 DESIGN_SPACE_DIM = 2
 
 design_space_bounds = [(0.0, 7.38), (0.0,7.27)]
 bounds = torch.tensor(design_space_bounds).transpose(-1, -2).to(device)
+
+# Create a target spectrum
 sim = GNPPhases("../AuNP/gold_nano_grid/")
 target_comp = np.array([0.0, 4.4])
 target = sim.simulate(target_comp) 
 num_samples = target.shape[0]
 xt = torch.from_numpy(sim.t).to(device).view(1, num_samples, 1)
-yt = torch.from_numpy(target).to(device).view(1, num_samples, 1) 
+yt = torch.from_numpy(target).to(device).view(1, num_samples, 1)
+
+# Load GP and NP models and set them to evaluation mode
 train_x = torch.load(DATA_DIR+'/train_x_%d.pt'%ITERATION, map_location=device)
 train_y = torch.load(DATA_DIR+'/train_y_%d.pt'%ITERATION, map_location=device)
 normalized_x = normalize(train_x, bounds).to(train_x)
@@ -73,14 +76,16 @@ def amplitude_phase_distance(t, f1, f2, **kwargs):
         y = (term1 - term2) ** 2
 
         amplitude = torch.sqrt(torch.trapezoid(y, t))
+        scaled_amplitude = amplitude/torch.sqrt(y.max())
 
         theta = torch.trapezoid(torch.sqrt(gam_dev).squeeze(), x=t)
         phase = torch.arccos(torch.clamp(theta, -1, 1))
 
-    return amplitude, phase, [warping, network, error]
+    return scaled_amplitude, phase, [warping, network, error]
 
-def simulator(c, mode=None):
+def simulator(c, mode="loss"):
     normalized_x = normalize(c, bounds)
+    print(c, normalized_x)
     posterior = GP.posterior(normalized_x.reshape(1,-1)) 
     y_samples = []
     for _ in range(250):
@@ -91,7 +96,7 @@ def simulator(c, mode=None):
     mu = torch.cat(y_samples).mean(dim=0, keepdim=True)
     sigma = torch.cat(y_samples).std(dim=0, keepdim=True)
 
-    if mode is None:
+    if mode=="loss":
         loss = torch.nn.functional.mse_loss(mu, yt)
         # optim_kwargs = {"n_iters":50, 
         #                 "n_basis":15, 
@@ -104,36 +109,37 @@ def simulator(c, mode=None):
         #                 }
         
         # amplitude, phase, _ = amplitude_phase_distance(xt.squeeze(), 
-        #                                                mu.squeeze(), 
-        #                                                yt.squeeze(),
+        #                                                yt.squeeze(), 
+        #                                                mu.squeeze(),
         #                                                **optim_kwargs
         #                                                )
-        # loss = amplitude+phase
-        # if torch.isnan(loss):
-        #     torch.save([xt, yt, mu],"./check_apdist_nan.pt")
+        # loss = 0.5*(amplitude+phase)
+        if torch.isnan(loss):
+            torch.save([xt, yt, mu],"./check_apdist_nan.pt")
 
         print("Current loss value : %2.4f"%loss.item())
 
         return loss
-    else:
+    elif mode=="simulate":
 
         return mu, sigma
 
 C0 = draw_sobol_samples(bounds=bounds, n=1, q=1).to(device)
 
-res = minimize(
-    simulator, C0, 
-    method='newton-cg', 
-    options=dict(line_search='strong-wolfe'),
-    max_iter=TRAINING_ITERATIONS,
-    disp=2
-)
+res = minimize(simulator, 
+               C0, 
+               method='newton-cg', 
+               options=dict(line_search='strong-wolfe'),
+               max_iter=TRAINING_ITERATIONS,
+               disp=2
+               )
+print("Optimization result : ", res)
 print('final x: {}'.format(res.x))
 print("Target composition : ", target_comp)
 with torch.no_grad():
     fig, ax = plt.subplots()
     ax.plot(sim.t, target, label="Target")
-    mu, sigma = simulator(res.x, mode="compute")
+    mu, sigma = simulator(res.x, mode="simulate")
     mu = mu.cpu().squeeze().numpy()
     sigma = sigma.cpu().squeeze().numpy()
     ax.plot(sim.t, mu, label="Best Estimate")

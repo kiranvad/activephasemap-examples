@@ -11,9 +11,8 @@ from botorch.optim import optimize_acqf
 from botorch.utils.transforms import normalize, unnormalize
 
 from activephasemap.models.utils import update_np
-from activephasemap.np.neural_process import NeuralProcess 
-from activephasemap.np.utils import context_target_split
-from activephasemap.test_functions.phasemaps import ExperimentalTestFunction
+from activephasemap.models.np.neural_process import NeuralProcess 
+from activephasemap.models.np.utils import context_target_split
 from activephasemap.utils.simulators import GNPPhases, UVVisExperiment
 from activephasemap.utils.settings import *
 from activephasemap.utils.visuals import *
@@ -57,7 +56,7 @@ bounds = torch.tensor(design_space_bounds).transpose(-1, -2).to(device)
 # you'd have to adjust the learning, number of iterations for early stopping 
 # Optimizing GP hyper-parameters is a highly non-trivial case so you need to chose the 
 # optimization algorithm parameters carefully.
-gp_model_args = {"model":"gp", "num_epochs" : 1300, "learning_rate" : 1e-3, "verbose": 1}
+gp_model_args = {"model":"gp", "num_epochs" : 100, "learning_rate" : 1e-4, "verbose": 1}
 np_model_args = {"num_iterations": 100, "verbose":True, "print_freq":100, "lr":5e-4}
 
 """ Helper functions """
@@ -81,30 +80,30 @@ def featurize_spectra(np_model, comps_all, spectra_all):
 
     return torch.cat(train_x), torch.cat(train_y) 
 
-def run_iteration(test_function):
+def run_iteration(expt):
     """ Perform a single iteration of active phasemapping.
 
     helper function to run a single iteration given 
     all the compositions and spectra obtained so far. 
     """
     # assemble data for surrogate model training  
-    comps_all = test_function.sim.comps 
-    spectra_all = test_function.sim.spectra_normalized # use normalized spectra
+    comps_all = expt.comps 
+    spectra_all = expt.spectra_normalized # use normalized spectra
     print('Data shapes : ', comps_all.shape, spectra_all.shape)
 
     # Specify the Neural Process model
     np_model = NeuralProcess(1, 1, 128, N_LATENT, 128).to(device)
     np_model.load_state_dict(torch.load(PRETRAIN_LOC, map_location=device))
 
-    np_model, np_loss = update_np(test_function.sim.t, spectra_all, np_model, **np_model_args)
+    np_model, np_loss = update_np(expt.t, spectra_all, np_model, **np_model_args)
     torch.save(np_model.state_dict(), SAVE_DIR+'np_model_%d.pt'%ITERATION)
     np.save(SAVE_DIR+'np_loss_%d.npy'%ITERATION, np_loss)
 
-    gp_model = initialize_model(gp_model_args, DESIGN_SPACE_DIM, N_LATENT, device) 
-
     train_x, train_y = featurize_spectra(np_model, comps_all, spectra_all)
     normalized_x = normalize(train_x, bounds)
-    gp_loss = gp_model.fit(normalized_x, train_y)
+    print(normalized_x.max(), normalized_x.min())
+    gp_model = initialize_model(normalized_x, train_y, gp_model_args, DESIGN_SPACE_DIM, N_LATENT, device)
+    gp_loss = gp_model.fit()
     np.save(SAVE_DIR+'gp_loss_%d.npy'%ITERATION, gp_loss)
     torch.save(gp_model.state_dict(), SAVE_DIR+'gp_model_%d.pt'%ITERATION)
 
@@ -149,16 +148,15 @@ if ITERATION == 0:
     spectra = generate_spectra(sim, comps_init)
     np.save(EXPT_DATA_DIR+'spectra_%d.npy'%ITERATION, spectra)
 else: 
-    expt = UVVisExperiment(ITERATION, EXPT_DATA_DIR)
+    expt = UVVisExperiment(bounds, ITERATION, EXPT_DATA_DIR)
     expt.generate(use_spline=True)
-    test_function = ExperimentalTestFunction(sim=expt, bounds=design_space_bounds)
     fig, ax = plt.subplots()
     expt.plot(ax, design_space_bounds)
     plt.savefig(PLOT_DIR+'train_spectra_%d.png'%ITERATION)
     plt.close()
 
     # obtain new set of compositions to synthesize and their spectra
-    comps_new, np_loss, np_model, gp_loss, gp_model, acquisition, train_x = run_iteration(test_function)
+    comps_new, np_loss, np_model, gp_loss, gp_model, acquisition, train_x = run_iteration(expt)
     np.save(EXPT_DATA_DIR+'comps_%d.npy'%(ITERATION), comps_new)
     spectra = generate_spectra(sim, comps_new)
     np.save(EXPT_DATA_DIR+'spectra_%d.npy'%ITERATION, spectra)
@@ -169,16 +167,17 @@ else:
     plt.savefig(PLOT_DIR+'loss_%d.png'%ITERATION)
     plt.close()      
 
-    fig, axs = plot_iteration(ITERATION, test_function, test_function.sim.comps, gp_model, np_model, acquisition, N_LATENT)
+    fig, axs = plot_iteration(ITERATION, expt, train_x, gp_model, np_model, acquisition, N_LATENT)
     axs['A2'].scatter(comps_new[:,0], comps_new[:,1],color='k')
     plt.savefig(PLOT_DIR+'itr_%d.png'%ITERATION)
     plt.close()
 
-    plot_model_accuracy(PLOT_DIR, gp_model, np_model, test_function)
+    plot_model_accuracy(PLOT_DIR, gp_model, np_model, expt)
 
     fig, ax = plt.subplots(figsize=(4,4))
-    plot_gpmodel_grid(ax, test_function, gp_model, np_model,
-    num_grid_spacing=10, color='k', show_sigma=True, scale_axis=True)
+    plot_gpmodel_grid(ax, expt, gp_model, np_model,
+                      num_grid_spacing=10, color='k', show_sigma=True, scale_axis=True
+                      )
     plt.tight_layout()
     plt.savefig(PLOT_DIR+'predicted_phasemap_%d.png'%ITERATION)
     plt.close()

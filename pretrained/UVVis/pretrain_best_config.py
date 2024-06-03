@@ -1,4 +1,4 @@
-import sys, os, pdb, shutil
+import sys, os, pdb, shutil, json
 from math import pi
 import numpy as np
 import matplotlib.pyplot as plt
@@ -19,11 +19,14 @@ if os.path.exists(PLOT_DIR):
 os.makedirs(PLOT_DIR)
 os.makedirs(PLOT_DIR+'itrs/')
 
-batch_size = 16
-r_dim = 16  # Dimension of representation of context points
-z_dim = 2  # Dimension of sampled latent variable
-h_dim = 32  # Dimension of hidden layers in encoder and decoder
-learning_rate = 0.00175605
+with open('/mmfs1/home/kiranvad/cheme-kiranvad/activephasemap-examples/pretrained/UVVis/best_config.json') as f:
+    config = json.load(f)
+
+batch_size = config["batch_size"]
+r_dim = config["r_dim"]  # Dimension of representation of context points
+z_dim = config["z_dim"]  # Dimension of sampled latent variable
+h_dim = config["h_dim"]  # Dimension of hidden layers in encoder and decoder
+learning_rate = config["lr"]
 
 num_epochs = 1000
 plot_epochs_freq = 100
