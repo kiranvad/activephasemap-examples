@@ -146,7 +146,7 @@ else:
 
     # obtain new set of compositions to synthesize and their spectra
     comps_new, np_loss, np_model, gp_loss, gp_model, acquisition, train_x = run_iteration(expt)
-    np.save(EXPT_DATA_DIR+'comps_%d.npy'%(ITERATION), comps_new)
+    # np.save(EXPT_DATA_DIR+'comps_%d.npy'%(ITERATION), comps_new)
 
     fig, axs = plt.subplots(1,2, figsize=(4*2, 4))
     axs[0].plot(np.arange(len(gp_loss)), gp_loss)

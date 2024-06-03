@@ -1,9 +1,10 @@
 #!/bin/bash
 
 #SBATCH --account=cheme
-#SBATCH --partition=compute
+#SBATCH --partition=ckpt
 #SBATCH --nodes=4
-#SBATCH --time=02:00:00
+#SBATCH --gpus=4
+#SBATCH --time=05:00:00
 #SBATCH --output=./slurm/%j.out
 #SBATCH --error=./slurm/%j.err
 #SBATCH --mail-user=kiranvad@uw.edu

@@ -168,3 +168,4 @@ pretrained/UVVis/uvvis_data_npy/
 *.err
 *.out
 *.log
+tune/

@@ -62,13 +62,23 @@ def train_np(config):
 
     neuralprocess = NeuralProcess(1, 1, r_dim, z_dim, h_dim)
 
-    PLOT_DIR = SAVE_DIR+'%d_%d_%d_%.2E_%d/plots/'%(r_dim, z_dim, h_dim, lr, batch_size)
+    device = "cpu"
+    if torch.cuda.is_available():
+        device = "cuda:0"
+        if torch.cuda.device_count() > 1:
+            neuralprocess = nn.DataParallel(neuralprocess)
+    neuralprocess.to(device)
+
+    PLOT_DIR = SAVE_DIR+'%d_%d_%d_%.2E_%d/'%(r_dim, z_dim, h_dim, lr, batch_size)
     if not os.path.exists(PLOT_DIR):
         os.makedirs(PLOT_DIR)
         print("Created %s directory"%PLOT_DIR)
     else:
         print("Directory %s already exists"%PLOT_DIR)
-        
+
+    with open(PLOT_DIR+'config.json', 'w') as fp:
+        json.dump(config, fp)   
+
     device = "cpu"
     if torch.cuda.is_available():
         device = "cuda:0"
@@ -85,15 +95,6 @@ def train_np(config):
 
     neuralprocess.training = True
 
-    if train.get_checkpoint():
-        loaded_checkpoint = train.get_checkpoint()
-        with loaded_checkpoint.as_directory() as loaded_checkpoint_dir:
-            model_state, optimizer_state = torch.load(
-                os.path.join(loaded_checkpoint_dir, "checkpoint.pt")
-            )
-            neuralprocess.load_state_dict(model_state)
-            optimizer.load_state_dict(optimizer_state)
-
     dataset = load_dataset("/mmfs1/home/kiranvad/cheme-kiranvad/activephasemap-examples/pretrained/UVVis/uvvis_data_npy/")
 
     data_loader = DataLoader(dataset, 
@@ -103,14 +104,10 @@ def train_np(config):
                             )
     x_plot = torch.linspace(dataset.xrange[0], dataset.xrange[1], steps = 100).reshape(1,100,1).to(device)
     np_trainer.train(data_loader, 500, x_plot=x_plot, plot_epoch=50, savedir=PLOT_DIR) 
-    torch.save(neuralprocess.state_dict(), SAVE_DIR+'model.pt')
+    torch.save(neuralprocess.state_dict(), PLOT_DIR+'model.pt')
     np.save(PLOT_DIR+'loss.npy', np_trainer.epoch_loss_history) 
 
-    with tempfile.TemporaryDirectory() as temp_checkpoint_dir:
-        path = os.path.join(temp_checkpoint_dir, "checkpoint.pt")
-        torch.save((neuralprocess.state_dict(), optimizer.state_dict()), path)
-        checkpoint = Checkpoint.from_directory(temp_checkpoint_dir)
-        train.report({"loss": (np_trainer.epoch_loss_history[-1])},checkpoint=checkpoint)
+    train.report({"loss": (np_trainer.epoch_loss_history[-1])})
 
 def main(num_samples=10, max_num_epochs=10):
     config = {
@@ -128,7 +125,7 @@ def main(num_samples=10, max_num_epochs=10):
     tuner = tune.Tuner(
         tune.with_resources(
             tune.with_parameters(train_np),
-            resources={"cpu": 40, "gpu": 0}
+            resources={"cpu": 40, "gpu": 0.5}
         ),
         tune_config=tune.TuneConfig(
             metric="loss",

@@ -6,30 +6,31 @@ import torch
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 from torch.utils.data.dataloader import default_collate
 from torch.utils.data import DataLoader
-from activephasemap.np.neural_process import NeuralProcess
-from activephasemap.np.training import NeuralProcessTrainer
-from activephasemap.np.utils import context_target_split
+from activephasemap.models.np.neural_process import NeuralProcess
+from activephasemap.models.np.training import NeuralProcessTrainer
+from activephasemap.models.np.utils import context_target_split
 
-sys.path.append('/mmfs1/home/kiranvad/kiranvad/activephasemap-examples/pretrained/')
+sys.path.append('/mmfs1/home/kiranvad/cheme-kiranvad/activephasemap-examples/pretrained/')
 from helpers import *
 
-PLOT_DIR = './plots/'
+PLOT_DIR = './bestconfig/'
 if os.path.exists(PLOT_DIR):
     shutil.rmtree(PLOT_DIR)
 os.makedirs(PLOT_DIR)
 os.makedirs(PLOT_DIR+'itrs/')
 
 batch_size = 16
-num_epochs = 1000
-r_dim = 128  # Dimension of representation of context points
+r_dim = 16  # Dimension of representation of context points
 z_dim = 2  # Dimension of sampled latent variable
-h_dim = 128  # Dimension of hidden layers in encoder and decoder
-learning_rate = 1e-3
+h_dim = 32  # Dimension of hidden layers in encoder and decoder
+learning_rate = 0.00175605
+
+num_epochs = 1000
 plot_epochs_freq = 100
 print_itr_freq = 1000
 
 # Create dataset
-dataset = UVVisDataset(root_dir='../uvvis_data_npy')
+dataset = UVVisDataset(root_dir='./uvvis_data_npy')
 data_loader = DataLoader(dataset, batch_size=batch_size, shuffle=True,
 collate_fn=lambda x: tuple(x_.to(device) for x_ in default_collate(x))
 )
@@ -64,7 +65,7 @@ np_trainer = NeuralProcessTrainer(device, neuralprocess, optimizer,
 neuralprocess.training = True
 x_plot = torch.linspace(dataset.xrange[0], dataset.xrange[1], steps = 100).reshape(1,100,1).to(device)
 np_trainer.train(data_loader, num_epochs, x_plot=x_plot, plot_epoch=plot_epochs_freq, savedir=PLOT_DIR+'/itrs/') 
-torch.save(neuralprocess.state_dict(), 'uvvis_np.pt')
+torch.save(neuralprocess.state_dict(), PLOT_DIR+'pretrain_np_bestconfig.pt')
 np.save(PLOT_DIR+'loss.npy', np_trainer.epoch_loss_history) 
 
 neuralprocess.training = False
