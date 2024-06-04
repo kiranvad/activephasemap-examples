@@ -43,6 +43,7 @@ yt = torch.from_numpy(target).to(device).view(1, num_samples, 1)
 train_x = torch.load(DATA_DIR+'/train_x_%d.pt'%ITERATION, map_location=device)
 train_y = torch.load(DATA_DIR+'/train_y_%d.pt'%ITERATION, map_location=device)
 normalized_x = normalize(train_x, bounds).to(train_x)
+print(normalized_x.max(), normalized_x.min())
 GP = initialize_model(normalized_x, train_y, gp_model_args, DESIGN_SPACE_DIM, N_LATENT, device)
 gp_state_dict = torch.load(DATA_DIR+'/gp_model_%d.pt'%ITERATION, map_location=device)
 GP.load_state_dict(gp_state_dict)
@@ -85,7 +86,6 @@ def amplitude_phase_distance(t, f1, f2, **kwargs):
 
 def simulator(c, mode="loss"):
     normalized_x = normalize(c, bounds)
-    print(c, normalized_x)
     posterior = GP.posterior(normalized_x.reshape(1,-1)) 
     y_samples = []
     for _ in range(250):
@@ -97,27 +97,27 @@ def simulator(c, mode="loss"):
     sigma = torch.cat(y_samples).std(dim=0, keepdim=True)
 
     if mode=="loss":
-        loss = torch.nn.functional.mse_loss(mu, yt)
-        # optim_kwargs = {"n_iters":50, 
-        #                 "n_basis":15, 
-        #                 "n_layers":15,
-        #                 "domain_type":"linear",
-        #                 "basis_type":"palais",
-        #                 "n_restarts":50,
-        #                 "lr":1e-1,
-        #                 "n_domain":num_samples
-        #                 }
+        # loss = torch.nn.functional.mse_loss(mu, yt)
+        optim_kwargs = {"n_iters":50, 
+                        "n_basis":15, 
+                        "n_layers":15,
+                        "domain_type":"linear",
+                        "basis_type":"palais",
+                        "n_restarts":50,
+                        "lr":1e-1,
+                        "n_domain":num_samples
+                        }
         
-        # amplitude, phase, _ = amplitude_phase_distance(xt.squeeze(), 
-        #                                                yt.squeeze(), 
-        #                                                mu.squeeze(),
-        #                                                **optim_kwargs
-        #                                                )
-        # loss = 0.5*(amplitude+phase)
+        amplitude, phase, _ = amplitude_phase_distance(xt.squeeze(), 
+                                                       yt.squeeze(), 
+                                                       mu.squeeze(),
+                                                       **optim_kwargs
+                                                       )
+        loss = 0.5*(amplitude+phase)
         if torch.isnan(loss):
             torch.save([xt, yt, mu],"./check_apdist_nan.pt")
 
-        print("Current loss value : %2.4f"%loss.item())
+        print(c, normalized_x, loss.item())
 
         return loss
     elif mode=="simulate":
@@ -126,14 +126,14 @@ def simulator(c, mode="loss"):
 
 C0 = draw_sobol_samples(bounds=bounds, n=1, q=1).to(device)
 
+
 res = minimize(simulator, 
                C0, 
-               method='newton-cg', 
+               method='l-bfgs', 
                options=dict(line_search='strong-wolfe'),
                max_iter=TRAINING_ITERATIONS,
-               disp=2
+               disp=2,
                )
-print("Optimization result : ", res)
 print('final x: {}'.format(res.x))
 print("Target composition : ", target_comp)
 with torch.no_grad():

@@ -56,7 +56,7 @@ bounds = torch.tensor(design_space_bounds).transpose(-1, -2).to(device)
 # you'd have to adjust the learning, number of iterations for early stopping 
 # Optimizing GP hyper-parameters is a highly non-trivial case so you need to chose the 
 # optimization algorithm parameters carefully.
-gp_model_args = {"model":"gp", "num_epochs" : 100, "learning_rate" : 1e-4, "verbose": 1}
+gp_model_args = {"model":"gp", "num_epochs" : 100, "learning_rate" : 0.01, "verbose": 1}
 np_model_args = {"num_iterations": 100, "verbose":True, "print_freq":100, "lr":5e-4}
 
 """ Helper functions """
@@ -130,9 +130,10 @@ def run_iteration(expt):
 
 def generate_spectra(sim, comps):
     "This functions mimics the UV-Vis characterization module run"
-    print("Generating spectra for iteration %d"%ITERATION, '\n', comps)
+    print("Generating spectra for iteration %d"%ITERATION, '\n')
     spectra = np.zeros((len(comps), sim.n_domain))
     for j, cj in enumerate(comps):
+        print(j, cj)
         spectra[j,:] = sim.simulate(cj)
 
     df = pd.DataFrame(spectra)
@@ -148,7 +149,7 @@ if ITERATION == 0:
     spectra = generate_spectra(sim, comps_init)
     np.save(EXPT_DATA_DIR+'spectra_%d.npy'%ITERATION, spectra)
 else: 
-    expt = UVVisExperiment(bounds, ITERATION, EXPT_DATA_DIR)
+    expt = UVVisExperiment(design_space_bounds, ITERATION, EXPT_DATA_DIR)
     expt.generate(use_spline=True)
     fig, ax = plt.subplots()
     expt.plot(ax, design_space_bounds)
