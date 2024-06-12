@@ -1,4 +1,4 @@
-import os, shutil, argparse, json
+import os, shutil, argparse, json, time, datetime
 import numpy as np
 import matplotlib.pyplot as plt
 
@@ -12,7 +12,7 @@ from activephasemap.models.utils import finetune_neural_process
 from activephasemap.models.np import NeuralProcess, context_target_split
 from activephasemap.utils.simulators import UVVisExperiment
 from activephasemap.utils.settings import *
-
+start = time.time()
 parser = argparse.ArgumentParser(
                     prog='peptide mediated gold nanoparticle synthesis experiment',
                     description='Perform a single iteration of active learning of Models 1 and 2',
@@ -110,8 +110,9 @@ def run_iteration(expt):
     # print("Range of normalized compositions : ", normalized_x.min(), normalized_x.max())
     gp_model = initialize_model(normalized_x, train_y, gp_model_args, DESIGN_SPACE_DIM, N_LATENT, device) 
     # gp_model.fit_botorch_style()
-    gp_model.fit()    
+    gp_loss = gp_model.fit() 
     torch.save(gp_model.state_dict(), SAVE_DIR+'gp_model_%d.pt'%ITERATION)
+    np.save(SAVE_DIR+'gp_loss_%d.npy'%ITERATION, gp_loss)
 
     acquisition = construct_acqf_by_model(gp_model, normalized_x, train_y, N_LATENT)
     standard_bounds = torch.tensor([(float(1e-5), 1.0) for _ in range(DESIGN_SPACE_DIM)]).transpose(-1, -2).to(device)
@@ -141,6 +142,8 @@ def plot_model_accuracy(expt, gp_model, np_model):
     This provides a qualitative understanding of current model 
     on training data.
     """
+    shutil.rmtree(PLOT_DIR+'preds/')
+    os.makedirs(PLOT_DIR+'preds/')
     num_samples, c_dim = expt.comps.shape
     for i in range(num_samples):
         fig, ax = plt.subplots()
@@ -180,3 +183,7 @@ else:
     plt.close()      
 
     plot_model_accuracy(expt, gp_model, np_model)
+
+end = time.time()
+time_str =  str(datetime.timedelta(seconds=end-start)) 
+print('Total time : %s'%(time_str))

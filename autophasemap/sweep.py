@@ -1,6 +1,6 @@
 import numpy as np 
 import matplotlib.pyplot as plt 
-import time, os, traceback, shutil, warnings, pickle
+import time, os, traceback, shutil, warnings, pickle, glob
 import ray 
 
 import torch
@@ -8,9 +8,8 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 torch.set_default_dtype(torch.double)
 from botorch.utils.transforms import normalize
 
-from activephasemap.np.neural_process import NeuralProcess
+from activephasemap.models.np import NeuralProcess
 from activephasemap.utils.settings import initialize_model
-from activephasemap.test_functions.phasemaps import ExperimentalTestFunction
 from activephasemap.utils.simulators import UVVisExperiment
 import matplotlib.ticker as ticker
 from activephasemap.utils.settings import from_comp_to_spectrum, get_twod_grid, AutoPhaseMapDataSet
@@ -21,11 +20,11 @@ from autophasemap import multi_kmeans_run, compute_BIC, BaseDataSet
 # Specify variables
 N_CLUSTERS_MIN = 1
 N_CLUSTERS_MAX = 5
-N_INIT_RUNS = 5
-MAX_ITER = 20
+N_INIT_RUNS = 10
+MAX_ITER = 50
 VERBOSE = 3
 GAMMA_GRID_N = 7
-ACTIVEPHASEMAP_EXPT = "expt-test"
+ACTIVEPHASEMAP_EXPT = "peptide_aunp_2D"
 
 if ACTIVEPHASEMAP_EXPT=="expt-test":
     SAVE_DIR = "/mmfs1/home/kiranvad/kiranvad/papers/autophasemap/expts"+'/output/expt_test_sweep/'
@@ -33,10 +32,10 @@ if ACTIVEPHASEMAP_EXPT=="expt-test":
     DATA_DIR = "/mmfs1/home/kiranvad/kiranvad/activephasemap-examples/expt-test"
     design_space_bounds = [(0.0, 7.38), (0.0,7.27)]
 elif ACTIVEPHASEMAP_EXPT=="peptide_aunp_2D":
-    SAVE_DIR = "/mmfs1/home/kiranvad/kiranvad/papers/autophasemap/expts"+'/output/peptide_aunp_2D_sweep/'
-    ITERATION = 3
-    DATA_DIR = "/mmfs1/home/kiranvad/kiranvad/040824/2D/"
+    DATA_DIR = "/mmfs1/home/kiranvad/cheme-kiranvad/activephasemap-examples/040824/2D/"
+    SAVE_DIR = DATA_DIR+"phasemap/"
     design_space_bounds = [(0.0, 87.0), (0.0,11.0)]
+    ITERATION = len(glob.glob(DATA_DIR+"data/spectra_*.npy"))
 
 if os.path.exists(SAVE_DIR):
     shutil.rmtree(SAVE_DIR)
@@ -46,8 +45,10 @@ print('Saving the results to %s'%SAVE_DIR)
 if not "ip_head" in os.environ:
     ray.init()
 else:
-    ray.init(address='auto', _node_ip_address=os.environ["ip_head"].split(":")[0],
-        _redis_password=os.environ["redis_password"])
+    ray.init(address='auto', 
+             _node_ip_address=os.environ["ip_head"].split(":")[0],
+             _redis_password=os.environ["redis_password"]
+             )
 
 grid_comps = np.load(DATA_DIR+"/grid/grid_comps.npy")
 grid_spectra = np.load(DATA_DIR+"/grid/grid_spectra.npy")
@@ -84,12 +85,13 @@ for N_CLUSTERS in np.arange(N_CLUSTERS_MIN,N_CLUSTERS_MAX+1):
                                 smoothen=True,
                                 grid_dim = GAMMA_GRID_N
                                 )
-    BIC_LIST.append(bic)
 
     with open(SAVE_DIR+'/result_%d.pkl'%N_CLUSTERS, 'wb') as handle:
         pickle.dump(out._asdict(), handle, 
             protocol=pickle.HIGHEST_PROTOCOL
             )
+    
+    np.save(SAVE_DIR+"/bic_%d.npy"%N_CLUSTERS, np.asarray(bic))
 
     # plot phase map and corresponding spectra
     fig, ax = plot(data, out)
@@ -98,12 +100,3 @@ for N_CLUSTERS in np.arange(N_CLUSTERS_MIN,N_CLUSTERS_MAX+1):
     plt.close()
 
 ray.shutdown()
-
-np.save(SAVE_DIR+"/bic.npy", np.asarray(BIC_LIST))
-fig, ax = plt.subplots()
-ax.errorbar(np.arange(N_CLUSTERS_MIN, N_CLUSTERS_MAX+1), 
-            np.asarray(BIC_LIST).mean(axis=1),
-            np.asarray(BIC_LIST).std(axis=1)
-)
-plt.savefig(SAVE_DIR+'/bic.png')
-plt.close()

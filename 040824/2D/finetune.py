@@ -4,7 +4,7 @@ torch.set_default_dtype(torch.double)
 from torch.utils.data import DataLoader, Dataset
 from activephasemap.models.np import NeuralProcess, train_neural_process
 from activephasemap.utils.simulators import UVVisExperiment
-import json, sys
+import json, sys, pdb
 import matplotlib.pyplot as plt
 
 sys.path.append('/mmfs1/home/kiranvad/cheme-kiranvad/activephasemap-examples/pretrained/')
@@ -28,19 +28,24 @@ def finetune_neural_process(data_loader, model, **kwargs):
     batch_size = kwargs.get('batch_size',  16)
     num_iterations = kwargs.get('num_iterations',  30)
     freeze_params, finetune_params = [], []
+    finetune_tags = ["_to_hidden.4.weight", "hidden_to"]
     for name, param in model.named_parameters():
-        if 'hidden_to' in name:
-            param.requires_grad = False
-            # if "weight" in name:
-            #     torch.nn.init.xavier_uniform_(param)
+        if "_to_hidden.4.weight" in name:
+            torch.nn.init.xavier_uniform_(param)
+            print("Finetuning %s..."%name)
             finetune_params.append(param)
+        elif "hidden_to" in name:
+            if "weight" in name:
+                torch.nn.init.xavier_uniform_(param)
+                finetune_params.append(param)
+                print("Finetuning %s..."%name)
         else:
             freeze_params.append(param)
 
     model.training = True
     lr = kwargs.get('learning_rate',  1e-3)
-    optimizer = torch.optim.Adam([{'params': freeze_params, "lr":lr/20},
-                                  {'params': finetune_params, 'lr': lr*20}],
+    optimizer = torch.optim.Adam([{'params': freeze_params, "lr":lr},
+                                  {'params': finetune_params, 'lr': lr*10}],
                                   lr=lr
                                 )
     epoch_loss = []
@@ -58,7 +63,7 @@ def finetune_neural_process(data_loader, model, **kwargs):
 design_space_bounds = [(0.0, 87.0), (0.0,11.0)]
 bounds = torch.tensor(design_space_bounds).transpose(-1, -2).to(device)
 EXPT_DATA_DIR = "./data/"
-ITERATION = 3
+ITERATION = 6
 expt = UVVisExperiment(bounds, ITERATION, EXPT_DATA_DIR)
 expt.generate(use_spline=True)
 
@@ -72,8 +77,8 @@ h_dim = config["h_dim"]  # Dimension of hidden layers in encoder and decoder
 learning_rate = config["lr"]
 
 model = NeuralProcess(r_dim, z_dim, h_dim).to(device)
-PRETRAIN_LOC = "/mmfs1/home/kiranvad/cheme-kiranvad/activephasemap-examples/pretrained/UVVis/tune/16_4_128_1.05E-03_4/"
-model.load_state_dict(torch.load(PRETRAIN_LOC+"model.pt", map_location=device))
+PRETRAIN_LOC = "/mmfs1/home/kiranvad/cheme-kiranvad/activephasemap-examples/pretrained/UVVis/test_np_new_api/model.pt"
+model.load_state_dict(torch.load(PRETRAIN_LOC, map_location=device))
 
 x_target = torch.linspace(min(expt.t), max(expt.t), 100).reshape(1,100,1).to(device)
 with torch.no_grad():

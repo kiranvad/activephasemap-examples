@@ -3,7 +3,7 @@
 #SBATCH --job-name=activephasemap
 #SBATCH --account=cheme
 #SBATCH --partition=compute
-#SBATCH --nodes=8
+#SBATCH --nodes=4
 #SBATCH --time=02:00:00
 #SBATCH --mem=128G
 #SBATCH --output=./slurm/%j.out
@@ -64,6 +64,6 @@ done
 ##############################################################################################
 
 echo "Launch Python job"
-python3 -u ./activephasemap/sweep.py
+python3 -u ./sweep.py
 echo "All Done!"
 exit

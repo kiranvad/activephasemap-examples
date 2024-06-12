@@ -29,8 +29,8 @@ class UVVisDataset(Dataset):
             print('%s Could not load %s'%(type(e).__name__, self.files[i]))
         wl, I = npzfile['wl'], npzfile['I']
         wl = (wl-min(wl))/(max(wl)-min(wl))
-        wl_ = torch.tensor(wl.astype(np.float32)).unsqueeze(1)
-        I_ = torch.tensor(I.astype(np.float32)).unsqueeze(1)
+        wl_ = torch.tensor(wl).unsqueeze(1).to(torch.double)
+        I_ = torch.tensor(I).unsqueeze(1).to(torch.double)
 
         return wl_, I_
 
@@ -47,7 +47,7 @@ def plot_posterior_samples(x_target, data_loader, model):
     fig, axs = plt.subplots(2,5, figsize=(4*5, 4*2))
     for ax in axs.flatten():
         x, y = next(iter(data_loader))
-        x_context, y_context, _, _ = context_target_split(x[0:1], y[0:1], 10, 50)
+        x_context, y_context, _, _ = context_target_split(x[0:1], y[0:1], 50, 50)
         with torch.no_grad():
             for _ in range(200):
                 # Neural process returns distribution over y_target

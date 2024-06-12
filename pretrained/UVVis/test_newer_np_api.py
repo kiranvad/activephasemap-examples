@@ -4,6 +4,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import torch
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+torch.set_default_dtype(torch.double)
 from torch.utils.data.dataloader import default_collate
 from torch.utils.data import DataLoader
 from activephasemap.models.np import NeuralProcess, train_neural_process
@@ -25,8 +26,8 @@ z_dim = config["z_dim"]  # Dimension of sampled latent variable
 h_dim = config["h_dim"]  # Dimension of hidden layers in encoder and decoder
 learning_rate = config["lr"]
 
-num_epochs = 100
-plot_epochs_freq = 10
+num_epochs = 500
+plot_epochs_freq = 100
 print_itr_freq = 1000
 
 # Create dataset
@@ -59,21 +60,21 @@ with torch.no_grad():
 neuralprocess.training = True
 optimizer = torch.optim.Adam(neuralprocess.parameters(), lr=learning_rate)
 epoch_loss = []
-for epoch in range(num_epochs):
+for epoch in range(num_epochs+1):
     neural_process, optimizer, loss_value = train_neural_process(neuralprocess, data_loader,optimizer)
 
-    if epoch%plot_epochs_freq==0:
+    if (epoch)%plot_epochs_freq==0:
         with torch.no_grad():
             fig, ax = plt.subplots()
             plot_samples(ax, neural_process, x_target, z_dim)
-            plt.savefig(PLOT_DIR+'itr_%d.png'%epoch)
+            plt.savefig(PLOT_DIR+'itr_%d.png'%(epoch))
             plt.close()
 
     print("Epoch: %d, Loss value : %2.4f"%(epoch, loss_value))
     epoch_loss.append(loss_value)
 
 torch.save(neuralprocess.state_dict(), PLOT_DIR+'model.pt')
-np.save(PLOT_DIR+'loss.npy', np_trainer.epoch_loss_history) 
+np.save(PLOT_DIR+'loss.npy', epoch_loss) 
 
 neuralprocess.training = False
 with torch.no_grad():

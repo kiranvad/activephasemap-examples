@@ -28,7 +28,7 @@ z_dim = config["z_dim"]  # Dimension of sampled latent variable
 h_dim = config["h_dim"]  # Dimension of hidden layers in encoder and decoder
 learning_rate = config["lr"]
 
-num_epochs = 1000
+num_epochs = 500
 plot_epochs_freq = 100
 print_itr_freq = 1000
 
