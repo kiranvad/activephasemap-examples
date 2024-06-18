@@ -1,4 +1,4 @@
-import os, sys, time, shutil, pdb, argparse
+import os, sys, time, shutil, pdb, argparse, json
 from datetime import datetime
 import numpy as np
 import pandas as pd
@@ -10,9 +10,8 @@ torch.set_default_dtype(torch.double)
 from botorch.optim import optimize_acqf
 from botorch.utils.transforms import normalize, unnormalize
 
-from activephasemap.models.utils import update_np
-from activephasemap.models.np.neural_process import NeuralProcess 
-from activephasemap.models.np.utils import context_target_split
+from activephasemap.models.np import NeuralProcess, context_target_split
+from activephasemap.models.utils import finetune_neural_process
 from activephasemap.utils.simulators import GNPPhases, UVVisExperiment
 from activephasemap.utils.settings import *
 from activephasemap.utils.visuals import *
@@ -32,17 +31,22 @@ N_ITERATIONS = 10
 MODEL_NAME = "gp"
 SIMULATOR = "goldnano"
 DATA_DIR = "../AuNP/gold_nano_grid/"
-PRETRAIN_LOC = "../pretrained/UVVis/uvvis_np.pt"
-N_LATENT = 2
 DESIGN_SPACE_DIM = 2
 
 EXPT_DATA_DIR = "./data/"
 SAVE_DIR = './output/'
 PLOT_DIR = './plots/'
 
+with open('/mmfs1/home/kiranvad/cheme-kiranvad/activephasemap-examples/pretrained/UVVis/best_config.json') as f:
+    best_np_config = json.load(f)
+N_LATENT = best_np_config["z_dim"]
+
+PRETRAIN_LOC = "/mmfs1/home/kiranvad/cheme-kiranvad/activephasemap-examples/pretrained/UVVis/test_np_new_api/model.pt"
+
 if ITERATION==0:
     for direc in [EXPT_DATA_DIR, SAVE_DIR, PLOT_DIR]:
-        shutil.rmtree(direc)
+        if os.path.exists(direc):
+            shutil.rmtree(direc)
         os.makedirs(direc)
 
 # setup a simulator to use as a proxy for experiment
@@ -53,11 +57,17 @@ sim.generate()
 design_space_bounds = [(0.0, 7.38), (0.0,7.27)]
 bounds = torch.tensor(design_space_bounds).transpose(-1, -2).to(device)
 
-# you'd have to adjust the learning, number of iterations for early stopping 
-# Optimizing GP hyper-parameters is a highly non-trivial case so you need to chose the 
-# optimization algorithm parameters carefully.
-gp_model_args = {"model":"gp", "num_epochs" : 100, "learning_rate" : 0.01, "verbose": 1}
-np_model_args = {"num_iterations": 100, "verbose":True, "print_freq":100, "lr":5e-4}
+gp_model_args = {"model":"gp", 
+                 "num_epochs" : 300, 
+                 "learning_rate" : 1e-2, 
+                 "verbose": 50,
+                 }
+np_model_args = {"num_iterations": 500, 
+                 "verbose":100, 
+                 "lr":best_np_config["lr"], 
+                 "batch_size": best_np_config["batch_size"]
+                 }
+
 
 """ Helper functions """
 def featurize_spectra(np_model, comps_all, spectra_all):
@@ -92,33 +102,40 @@ def run_iteration(expt):
     print('Data shapes : ', comps_all.shape, spectra_all.shape)
 
     # Specify the Neural Process model
-    np_model = NeuralProcess(1, 1, 128, N_LATENT, 128).to(device)
+    np_model = NeuralProcess(best_np_config["r_dim"], N_LATENT, best_np_config["h_dim"]).to(device)
     np_model.load_state_dict(torch.load(PRETRAIN_LOC, map_location=device))
 
-    np_model, np_loss = update_np(expt.t, spectra_all, np_model, **np_model_args)
+    np_model, np_loss = finetune_neural_process(expt.t, spectra_all, np_model, **np_model_args)
     torch.save(np_model.state_dict(), SAVE_DIR+'np_model_%d.pt'%ITERATION)
     np.save(SAVE_DIR+'np_loss_%d.npy'%ITERATION, np_loss)
 
     train_x, train_y = featurize_spectra(np_model, comps_all, spectra_all)
     normalized_x = normalize(train_x, bounds)
-    print(normalized_x.max(), normalized_x.min())
     gp_model = initialize_model(normalized_x, train_y, gp_model_args, DESIGN_SPACE_DIM, N_LATENT, device)
     gp_loss = gp_model.fit()
     np.save(SAVE_DIR+'gp_loss_%d.npy'%ITERATION, gp_loss)
     torch.save(gp_model.state_dict(), SAVE_DIR+'gp_model_%d.pt'%ITERATION)
 
+    print("Collecting next data points to sample by acqusition optimization...")
     acquisition = construct_acqf_by_model(gp_model, normalized_x, train_y, N_LATENT)
     standard_bounds = torch.tensor([(float(1e-5), 1.0) for _ in range(DESIGN_SPACE_DIM)]).transpose(-1, -2).to(device)
-    normalized_candidates, acqf_values = optimize_acqf(
-        acquisition, 
-        standard_bounds, 
-        q=BATCH_SIZE, 
-        num_restarts=20, 
-        raw_samples=1024, 
-        return_best_only=True,
-        sequential=False,
-        options={"batch_limit": 1, "maxiter": 10, "with_grad":True}
-        )
+    try:
+        normalized_candidates, acqf_values = optimize_acqf(
+            acquisition, 
+            standard_bounds, 
+            q=BATCH_SIZE, 
+            num_restarts=20, 
+            raw_samples=1024, 
+            return_best_only=True,
+            sequential=False,
+            options={"batch_limit": 1, "maxiter": 10, "with_grad":True}
+            )
+    except Exception as err:
+        if "gradf are NaN" in str(err):
+            print("Gradients are NaN in acquisiton optimization, likely due to bad hyper parameters...")
+            gp_model.print_hyperparams()
+        else:
+            traceback.print_exc()
 
     # calculate acquisition values after rounding
     new_x = unnormalize(normalized_candidates.detach(), bounds=bounds) 
@@ -139,6 +156,31 @@ def generate_spectra(sim, comps):
     df = pd.DataFrame(spectra)
 
     return df
+def plot_model_accuracy(expt, gp_model, np_model):
+    """ Plot accuracy of model predictions of experimental data
+
+    This provides a qualitative understanding of current model 
+    on training data.
+    """
+    print("Creating plots to visualize training data predictions...")
+    iter_plot_dir = PLOT_DIR+'preds_%d/'%ITERATION
+    if os.path.exists(iter_plot_dir):
+        shutil.rmtree(iter_plot_dir)
+    os.makedirs(iter_plot_dir)
+
+    num_samples, c_dim = expt.comps.shape
+    for i in range(num_samples):
+        fig, ax = plt.subplots()
+        ci = expt.comps[i,:].reshape(1, c_dim)
+        with torch.no_grad():
+            mu, sigma = from_comp_to_spectrum(expt, gp_model, np_model, ci)
+            mu_ = mu.cpu().squeeze()
+            sigma_ = sigma.cpu().squeeze()
+            ax.plot(expt.wl, mu_)
+            ax.fill_between(expt.wl, mu_-sigma_, mu_+sigma_, color='grey')
+        ax.scatter(expt.wl, expt.F[i], color='k')
+        plt.savefig(iter_plot_dir+'%d.png'%(i))
+        plt.close()
 
 # Set up a synthetic data emulating an experiment
 if ITERATION == 0:
@@ -151,6 +193,7 @@ if ITERATION == 0:
 else: 
     expt = UVVisExperiment(design_space_bounds, ITERATION, EXPT_DATA_DIR)
     expt.generate(use_spline=True)
+
     fig, ax = plt.subplots()
     expt.plot(ax, design_space_bounds)
     plt.savefig(PLOT_DIR+'train_spectra_%d.png'%ITERATION)
@@ -168,12 +211,16 @@ else:
     plt.savefig(PLOT_DIR+'loss_%d.png'%ITERATION)
     plt.close()      
 
-    fig, axs = plot_iteration(ITERATION, expt, train_x, gp_model, np_model, acquisition, N_LATENT)
-    axs['A2'].scatter(comps_new[:,0], comps_new[:,1],color='k')
+    plot_iteration(ITERATION, expt, comps_new,  gp_model, np_model, acquisition, N_LATENT)
     plt.savefig(PLOT_DIR+'itr_%d.png'%ITERATION)
     plt.close()
 
-    plot_model_accuracy(PLOT_DIR, gp_model, np_model, expt)
+    plot_model_accuracy(expt, gp_model, np_model)
+    
+    plot_gpmodel_expt(expt, gp_model, np_model)
+    plt.tight_layout()
+    plt.savefig(PLOT_DIR+'gp_model_%d.png'%ITERATION)
+    plt.close()
 
     fig, ax = plt.subplots(figsize=(4,4))
     plot_gpmodel_grid(ax, expt, gp_model, np_model,

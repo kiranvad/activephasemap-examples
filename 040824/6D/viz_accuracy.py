@@ -7,15 +7,18 @@ torch.set_default_dtype(torch.double)
 
 from botorch.utils.transforms import normalize
 
-from activephasemap.models.np.neural_process import NeuralProcess
+from activephasemap.models.np import NeuralProcess
 from activephasemap.utils.settings import initialize_model
 from activephasemap.utils.simulators import UVVisExperiment
 from funcshape.functions import Function, SRSF, get_warping_function
-
-import glob
+from apdist.distances import AmplitudePhaseDistance as dist
+import glob, json
 
 DATA_DIR = "./"
 TOTAL_ITERATIONS = len(glob.glob(DATA_DIR+"data/comps_*.npy"))
+with open('/mmfs1/home/kiranvad/cheme-kiranvad/activephasemap-examples/pretrained/UVVis/best_config.json') as f:
+    best_np_config = json.load(f)
+N_LATENT = best_np_config["z_dim"]
 
 def load_data_and_models(max_iters):
     design_space_bounds = [(0.0, 75.0),
@@ -28,20 +31,18 @@ def load_data_and_models(max_iters):
     expt = UVVisExperiment(design_space_bounds, max_iters, DATA_DIR+"/data/")
     expt.generate(use_spline=True)
     gp_model_args = {"model":"gp", "num_epochs" : 1, "learning_rate" : 1e-3, "verbose": 1}
-    input_dim = expt.dim
-    output_dim = 2 
 
     # Load trained GP model for p(z|c)
     train_x = torch.load(DATA_DIR+'/output/train_x_%d.pt'%max_iters, map_location=device)
     train_y = torch.load(DATA_DIR+'/output/train_y_%d.pt'%max_iters, map_location=device)
     bounds = expt.bounds.to(device)
     normalized_x = normalize(train_x, bounds).to(train_x)
-    gp_model = initialize_model(normalized_x, train_y, gp_model_args, input_dim, output_dim, device)
+    gp_model = initialize_model(normalized_x, train_y, gp_model_args, expt.dim, N_LATENT, device)
     gp_state_dict = torch.load(DATA_DIR+'/output/gp_model_%d.pt'%(max_iters), map_location=device)
     gp_model.load_state_dict(gp_state_dict)
 
     # Load trained NP model for p(y|z)
-    np_model = NeuralProcess(1, 1, 128, 2, 128).to(device)
+    np_model = NeuralProcess(best_np_config["r_dim"], N_LATENT, best_np_config["h_dim"]).to(device)
     np_model.load_state_dict(torch.load(DATA_DIR+'/output/np_model_%d.pt'%(max_iters), map_location=device))
 
     return expt, gp_model, np_model
@@ -77,7 +78,8 @@ def amplitude_phase_distance(t, f1, f2, **kwargs):
 
     return amplitude, phase, [warping, network, error]
 
-def get_accuracy(comps, bounds, time, spectra, gp_model, np_model):
+@torch.no_grad()
+def get_accuracy(comps, bounds, time, spectra, gp_model, np_model, use_torch=False):
     distances = []
     for i in range(comps.shape[0]):
         comp = comps[i,:].reshape(-1,1)
@@ -97,18 +99,24 @@ def get_accuracy(comps, bounds, time, spectra, gp_model, np_model):
             mu.append(mu_i)
 
         y_pred = torch.cat(mu).mean(dim=0, keepdim=True).squeeze()
-        optim_kwargs = {"n_iters":50, 
-                        "n_basis":10, 
-                        "n_layers":10,
-                        "domain_type":"linear",
-                        "basis_type":"palais",
-                        "n_restarts":50,
-                        "lr":1e-1,
-                        "n_domain":len(time),
-                        "eps":0.1
-                        }
-        amplitude, phase, _ = amplitude_phase_distance(tt, y_true, y_pred, **optim_kwargs)
-        distances.append((amplitude + phase).item())
+
+        if use_torch:
+            optim_kwargs = {"n_iters":50, 
+                            "n_basis":10, 
+                            "n_layers":10,
+                            "domain_type":"linear",
+                            "basis_type":"palais",
+                            "n_restarts":50,
+                            "lr":1e-1,
+                            "n_domain":len(time),
+                            "eps":0.1
+                            }
+            amplitude, phase, _ = amplitude_phase_distance(tt, y_true, y_pred, **optim_kwargs)
+            distances.append((amplitude + phase).item())
+        else:
+            optim_kwargs = {"optim":"DP", "grid_dim":10}
+            amplitude, phase = dist(time, y_true.numpy(), y_pred.numpy(), **optim_kwargs) 
+            distances.append(amplitude + phase)
 
     return np.asarray(distances).mean()
 
@@ -141,6 +149,7 @@ for iters in range(1,TOTAL_ITERATIONS):
 
 train = np.asarray([y[0] for _,y in accuracies.items()]).squeeze()
 test = np.asarray([y[1] for _,y in accuracies.items()]).squeeze()
+np.savez("./output/accuracy.npz", train, test)
 fig, ax = plt.subplots()
 xticks = np.arange(1, TOTAL_ITERATIONS)
 ax.plot(xticks, train,  "-o", label="Train Error")

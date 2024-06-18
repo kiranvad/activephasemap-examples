@@ -4,7 +4,7 @@ torch.set_default_dtype(torch.double)
 from torch.utils.data import DataLoader, Dataset
 from activephasemap.models.np import NeuralProcess, train_neural_process
 from activephasemap.utils.simulators import UVVisExperiment
-import json, sys, pdb
+import json, sys, pdb, glob
 import matplotlib.pyplot as plt
 
 sys.path.append('/mmfs1/home/kiranvad/cheme-kiranvad/activephasemap-examples/pretrained/')
@@ -63,8 +63,8 @@ def finetune_neural_process(data_loader, model, **kwargs):
 design_space_bounds = [(0.0, 87.0), (0.0,11.0)]
 bounds = torch.tensor(design_space_bounds).transpose(-1, -2).to(device)
 EXPT_DATA_DIR = "./data/"
-ITERATION = 6
-expt = UVVisExperiment(bounds, ITERATION, EXPT_DATA_DIR)
+ITERATION = len(glob.glob(EXPT_DATA_DIR+"/spectra_*.npy"))
+expt = UVVisExperiment(design_space_bounds, ITERATION, EXPT_DATA_DIR)
 expt.generate(use_spline=True)
 
 with open('/mmfs1/home/kiranvad/cheme-kiranvad/activephasemap-examples/pretrained/UVVis/best_config.json') as f:

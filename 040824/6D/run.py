@@ -34,7 +34,7 @@ with open('/mmfs1/home/kiranvad/cheme-kiranvad/activephasemap-examples/pretraine
     best_np_config = json.load(f)
 N_LATENT = best_np_config["z_dim"]
 
-PRETRAIN_LOC = "/mmfs1/home/kiranvad/cheme-kiranvad/activephasemap-examples/pretrained/UVVis/tune/16_4_128_1.05E-03_4/model.pt"
+PRETRAIN_LOC = "/mmfs1/home/kiranvad/cheme-kiranvad/activephasemap-examples/pretrained/UVVis/test_np_new_api/model.pt"
 
 if ITERATION==0:
     for direc in [EXPT_DATA_DIR, SAVE_DIR, PLOT_DIR]:
@@ -52,12 +52,12 @@ design_space_bounds = [(0.0, 75.0),
 bounds = torch.tensor(design_space_bounds).transpose(-1, -2).to(device)
 
 gp_model_args = {"model":"gp", 
-                 "num_epochs" : 200, 
+                 "num_epochs" : 500, 
                  "learning_rate" : 5e-2, 
-                 "verbose": 1
+                 "verbose": 10
                  }
-np_model_args = {"num_iterations": 200, 
-                 "verbose":50, 
+np_model_args = {"num_iterations": 500, 
+                 "verbose":100, 
                  "lr":best_np_config["lr"], 
                  "batch_size": best_np_config["batch_size"]
                  }
@@ -66,7 +66,7 @@ np_model_args = {"num_iterations": 200,
 def featurize_spectra(np_model, comps_all, spectra_all):
     """ Obtain latent space embedding from spectra.
     """
-    num_draws = 4
+    num_draws = 3
     num_samples, n_domain = spectra_all.shape
     spectra = torch.zeros((num_samples, n_domain)).to(device)
     for i, si in enumerate(spectra_all):
@@ -104,16 +104,14 @@ def run_iteration(expt):
 
     train_x, train_y = featurize_spectra(np_model, comps_all, spectra_all)
     normalized_x = normalize(train_x, bounds)
-    # for i in range(train_x.shape[0]):
-    #     print(i, train_x[i,:], normalized_x[i,:], train_y[i,:])
 
-    # print("Range of normalized compositions : ", normalized_x.min(), normalized_x.max())
     gp_model = initialize_model(normalized_x, train_y, gp_model_args, DESIGN_SPACE_DIM, N_LATENT, device) 
     # gp_model.fit_botorch_style()
     gp_loss = gp_model.fit() 
     torch.save(gp_model.state_dict(), SAVE_DIR+'gp_model_%d.pt'%ITERATION)
     np.save(SAVE_DIR+'gp_loss_%d.npy'%ITERATION, gp_loss)
 
+    print("Collecting next data points to sample by acqusition optimization...")
     acquisition = construct_acqf_by_model(gp_model, normalized_x, train_y, N_LATENT)
     standard_bounds = torch.tensor([(float(1e-5), 1.0) for _ in range(DESIGN_SPACE_DIM)]).transpose(-1, -2).to(device)
     normalized_candidates, acqf_values = optimize_acqf(
@@ -134,7 +132,7 @@ def run_iteration(expt):
     torch.save(train_y.cpu(), SAVE_DIR+"train_y_%d.pt" %ITERATION)
 
 
-    return new_x.cpu().numpy(), np_loss, np_model, gp_model
+    return new_x.cpu().numpy(), np_loss, np_model, gp_loss, gp_model
 
 def plot_model_accuracy(expt, gp_model, np_model):
     """ Plot accuracy of model predictions of experimental data
@@ -142,8 +140,11 @@ def plot_model_accuracy(expt, gp_model, np_model):
     This provides a qualitative understanding of current model 
     on training data.
     """
-    shutil.rmtree(PLOT_DIR+'preds/')
-    os.makedirs(PLOT_DIR+'preds/')
+    print("Creating plots to visualize training data predictions...")
+    iter_plot_dir = PLOT_DIR+'preds_%d/'%ITERATION
+    if os.path.exists(iter_plot_dir):
+        shutil.rmtree(iter_plot_dir)
+    os.makedirs(iter_plot_dir)
     num_samples, c_dim = expt.comps.shape
     for i in range(num_samples):
         fig, ax = plt.subplots()
@@ -155,7 +156,7 @@ def plot_model_accuracy(expt, gp_model, np_model):
             ax.plot(expt.wl, mu_)
             ax.fill_between(expt.wl, mu_-sigma_, mu_+sigma_, color='grey')
         ax.scatter(expt.wl, expt.F[i], color='k')
-        plt.savefig(PLOT_DIR+'preds/%d.png'%(i))
+        plt.savefig(iter_plot_dir+'%d.png'%(i))
         plt.close()
 
 # Set up a synthetic data emulating an experiment
@@ -174,11 +175,14 @@ else:
     plt.close()
 
     # obtain new set of compositions to synthesize and their spectra
-    comps_new, np_loss, np_model, gp_model = run_iteration(expt)
+    comps_new, np_loss, np_model, gp_loss, gp_model = run_iteration(expt)
     np.save(EXPT_DATA_DIR+'comps_%d.npy'%(ITERATION), comps_new)
 
-    fig, ax = plt.subplots()
-    ax.plot(np.arange(len(np_loss)), np_loss)  
+    fig, axs = plt.subplots(1,2, figsize=(4*2, 4))
+    axs[0].plot(np.arange(len(np_loss)), np_loss)
+    axs[0].set_title("NP-Loss")  
+    axs[1].plot(np.arange(len(gp_loss)), gp_loss)
+    axs[1].set_title("GP-Loss")
     plt.savefig(PLOT_DIR+'loss_%d.png'%ITERATION)
     plt.close()      
 

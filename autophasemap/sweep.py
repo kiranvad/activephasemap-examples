@@ -52,7 +52,10 @@ else:
 
 grid_comps = np.load(DATA_DIR+"/grid/grid_comps.npy")
 grid_spectra = np.load(DATA_DIR+"/grid/grid_spectra.npy")
+grid_spectra = grid_spectra/grid_spectra[:,0][:,None]
 t = np.linspace(0,1, grid_spectra.shape[1])
+print("Compositions shape: ", grid_comps.shape)
+print("Spectra shape : ", grid_spectra.shape)
 
 data = AutoPhaseMapDataSet(grid_comps,t, grid_spectra)
 data.generate(process=None)

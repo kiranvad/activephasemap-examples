@@ -1,4 +1,4 @@
-import os, sys, time, shutil, pdb, argparse
+import os, sys, time, shutil, pdb, argparse,json
 from datetime import datetime
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -12,12 +12,11 @@ from botorch.utils.transforms import normalize, unnormalize
 from torch.distributions import Normal
 
 # import minimize function from https://github.com/rfeinman/pytorch-minimize
-from torchmin import minimize
+from torchmin import minimize_constr
 # import Amplitude-Phase distance from https://github.com/kiranvad/Amplitude-Phase-Distance/tree/funcshape
 from funcshape.functions import Function, SRSF, get_warping_function
 
-from activephasemap.models.np.neural_process import NeuralProcess 
-from activephasemap.models.np.utils import context_target_split
+from activephasemap.models.np import NeuralProcess, context_target_split
 from activephasemap.utils.simulators import GNPPhases
 from activephasemap.utils.settings import initialize_model 
 
@@ -25,7 +24,9 @@ gp_model_args = {"model":"gp", "num_epochs" : 1, "learning_rate" : 1e-3, "verbos
 TRAINING_ITERATIONS = 50
 DATA_DIR = './output'
 ITERATION = 5
-N_LATENT = 2
+with open('/mmfs1/home/kiranvad/cheme-kiranvad/activephasemap-examples/pretrained/UVVis/best_config.json') as f:
+    best_np_config = json.load(f)
+N_LATENT = best_np_config["z_dim"]
 DESIGN_SPACE_DIM = 2
 
 design_space_bounds = [(0.0, 7.38), (0.0,7.27)]
@@ -49,7 +50,7 @@ gp_state_dict = torch.load(DATA_DIR+'/gp_model_%d.pt'%ITERATION, map_location=de
 GP.load_state_dict(gp_state_dict)
 GP.train(False)
 
-NP = NeuralProcess(1, 1, 128, 2, 128).to(device)
+NP = NeuralProcess(best_np_config["r_dim"], N_LATENT, best_np_config["h_dim"]).to(device)
 NP.load_state_dict(torch.load(DATA_DIR+'/np_model_%d.pt'%ITERATION, map_location=device)) 
 NP.train(False)
 
@@ -67,7 +68,7 @@ def amplitude_phase_distance(t, f1, f2, **kwargs):
     q1, q2 = SRSF(f1), SRSF(f2)
     delta = q1.qx-q2.qx
     if delta.sum() == 0:
-        amplitude, phase = torch.Tensor([0.0]), torch.Tensor([0.0])
+        amplitude, phase = torch.Tensor([0.0]).to(device), torch.Tensor([0.0]).to(device)
     else:
         network.project()
         gam_dev = network.derivative(t.unsqueeze(-1), h=None)
@@ -88,7 +89,7 @@ def simulator(c, mode="loss"):
     normalized_x = normalize(c, bounds)
     posterior = GP.posterior(normalized_x.reshape(1,-1)) 
     y_samples = []
-    for _ in range(250):
+    for _ in range(20):
         z = posterior.rsample().squeeze(0)
         y, _ = NP.xz_to_y(xt, z)
         y_samples.append(y)
@@ -96,44 +97,46 @@ def simulator(c, mode="loss"):
     mu = torch.cat(y_samples).mean(dim=0, keepdim=True)
     sigma = torch.cat(y_samples).std(dim=0, keepdim=True)
 
-    if mode=="loss":
-        # loss = torch.nn.functional.mse_loss(mu, yt)
-        optim_kwargs = {"n_iters":50, 
-                        "n_basis":15, 
-                        "n_layers":15,
-                        "domain_type":"linear",
-                        "basis_type":"palais",
-                        "n_restarts":50,
-                        "lr":1e-1,
-                        "n_domain":num_samples
-                        }
-        
-        amplitude, phase, _ = amplitude_phase_distance(xt.squeeze(), 
-                                                       yt.squeeze(), 
-                                                       mu.squeeze(),
-                                                       **optim_kwargs
-                                                       )
-        loss = 0.5*(amplitude+phase)
-        if torch.isnan(loss):
-            torch.save([xt, yt, mu],"./check_apdist_nan.pt")
-
-        print(c, normalized_x, loss.item())
-
+    if not mode=="simulate":
+        loss_type = mode.split("-")[1]
+        if loss_type=="MSE":
+            loss = torch.nn.functional.mse_loss(mu, yt)
+        elif loss_type=="AP":
+            optim_kwargs = {"n_iters":50, 
+                            "n_basis":15, 
+                            "n_layers":15,
+                            "domain_type":"linear",
+                            "basis_type":"palais",
+                            "n_restarts":50,
+                            "lr":1e-1,
+                            "n_domain":num_samples,
+                            "verbose":1
+                            }
+            
+            amplitude, phase, _ = amplitude_phase_distance(xt.squeeze(), 
+                                                        yt.squeeze(), 
+                                                        mu.squeeze(),
+                                                        **optim_kwargs
+                                                        )
+            loss = 0.5*(amplitude+phase)
+            if torch.isnan(loss):
+                torch.save([xt, yt, mu],"./check_apdist_nan.pt")
+        else:
+            raise RuntimeError("Loss type %s not recognized"%loss_type)
+        print(c.data, normalized_x.data, loss.item())
         return loss
-    elif mode=="simulate":
+    else:
 
         return mu, sigma
 
 C0 = draw_sobol_samples(bounds=bounds, n=1, q=1).to(device)
 
-
-res = minimize(simulator, 
-               C0, 
-               method='l-bfgs', 
-               options=dict(line_search='strong-wolfe'),
-               max_iter=TRAINING_ITERATIONS,
-               disp=2,
-               )
+res = minimize_constr(lambda c : simulator(c, mode="loss-MSE"),
+                      C0, 
+                      bounds = dict(lb=bounds[0,:], ub=bounds[1,:]),
+                      max_iter=TRAINING_ITERATIONS,
+                      disp=0
+                      )
 print('final x: {}'.format(res.x))
 print("Target composition : ", target_comp)
 with torch.no_grad():
