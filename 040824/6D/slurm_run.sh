@@ -3,9 +3,9 @@
 #SBATCH --job-name=6D
 #SBATCH --account=cheme
 #SBATCH --partition=ckpt-all
-#SBATCH --nodes=1
-#SBATCH --time=05:00:00
-#SBATCH --gpus=1
+#SBATCH --nodes=2
+#SBATCH --time=01:00:00
+#SBATCH --gpus=2
 #SBATCH --output=./slurm/%j.out
 #SBATCH --error=./slurm/%j.err
 #SBATCH --mail-user=kiranvad@uw.edu

@@ -66,7 +66,7 @@ np_model_args = {"num_iterations": 500,
 def featurize_spectra(np_model, comps_all, spectra_all):
     """ Obtain latent space embedding from spectra.
     """
-    num_draws = 3
+    num_draws = 16
     num_samples, n_domain = spectra_all.shape
     spectra = torch.zeros((num_samples, n_domain)).to(device)
     for i, si in enumerate(spectra_all):
@@ -81,7 +81,7 @@ def featurize_spectra(np_model, comps_all, spectra_all):
             z, _ = np_model.xy_to_mu_sigma(x_context, y_context) 
             train_y.append(z)
 
-    return torch.cat(train_x), torch.cat(train_y) 
+    return torch.cat(train_x).to(device), torch.cat(train_y).to(device)
 
 def run_iteration(expt):
     """ Perform a single iteration of active phasemapping.
@@ -103,10 +103,9 @@ def run_iteration(expt):
     np.save(SAVE_DIR+'np_loss_%d.npy'%ITERATION, np_loss)
 
     train_x, train_y = featurize_spectra(np_model, comps_all, spectra_all)
-    normalized_x = normalize(train_x, bounds)
-
+    normalized_x = normalize(train_x, bounds).to(device)
+    print("GP data shapes : ", normalized_x.shape, train_y.shape)
     gp_model = initialize_model(normalized_x, train_y, gp_model_args, DESIGN_SPACE_DIM, N_LATENT, device) 
-    # gp_model.fit_botorch_style()
     gp_loss = gp_model.fit() 
     torch.save(gp_model.state_dict(), SAVE_DIR+'gp_model_%d.pt'%ITERATION)
     np.save(SAVE_DIR+'gp_loss_%d.npy'%ITERATION, gp_loss)

@@ -150,3 +150,6 @@ with torch.no_grad():
     ax.legend()
     plt.savefig("./plots/retrosynthesize_target.png")
     plt.show()
+
+## A reason why this isn't working is because we have a stochastic model 
+## so try some technqiues borrowed from this tutorial https://botorch.org/v/0.1.1/tutorials/optimize_stochastic
