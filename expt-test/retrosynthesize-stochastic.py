@@ -15,8 +15,12 @@ from torch.distributions import Normal
 from activephasemap.models.np import NeuralProcess, context_target_split
 from activephasemap.utils.simulators import GNPPhases
 from activephasemap.utils.settings import initialize_model 
+from activephasemap.utils.settings import get_twod_grid
+
+
 TRAINING_ITERATIONS = 200 # total iterations for each optimization
 NUM_RESTARTS = 8 # number of optimization from random restarts
+LEARNING_RATE = 0.1
 
 SAVE_DIR = "./retrosynthesis/"
 if os.path.exists(SAVE_DIR):
@@ -35,7 +39,7 @@ bounds = torch.tensor(design_space_bounds).transpose(-1, -2).to(device)
 
 # Create a target spectrum
 sim = GNPPhases("../AuNP/gold_nano_grid/")
-target_comp = np.array([0.0, 4.4])
+target_comp = np.array([4.4, 5.8])
 target = sim.simulate(target_comp) 
 n_domain = target.shape[0]
 xt = torch.from_numpy(sim.t).to(device).view(1, n_domain, 1)
@@ -55,7 +59,7 @@ NP = NeuralProcess(best_np_config["r_dim"], N_LATENT, best_np_config["h_dim"]).t
 NP.load_state_dict(torch.load(DATA_DIR+'/np_model_%d.pt'%ITERATION, map_location=device)) 
 NP.train(False)
 
-def simulator(c, mode="loss"):
+def simulator(c):
     num_points, dim = c.shape 
     num_z_samples = 16
     normalized_x = normalize(c, bounds)
@@ -71,25 +75,28 @@ def simulator(c, mode="loss"):
         spectra_pred[i,:, 0] = torch.cat(yi_samples).mean(dim=0).squeeze()
         spectra_pred[i,:, 1] = torch.cat(yi_samples).std(dim=0).squeeze()
 
-    
-        target = yt.squeeze().repeat(num_points, 1)
-        loss = torch.nn.functional.mse_loss(spectra_pred[..., 0], target, reduction="none")
+    target = yt.squeeze().repeat(num_points, 1)
+    loss = torch.nn.functional.mse_loss(spectra_pred[..., 0], target, reduction="none")
 
     return loss.mean(dim=1), spectra_pred
 
-# generate a large number of random samples
-Xraw = bounds[0] + (bounds[1] - bounds[0]) * torch.rand(100 * NUM_RESTARTS,1, DESIGN_SPACE_DIM)
-Yraw,_ = simulator(Xraw.squeeze())  # evaluate the acquisition function on these q-batches
-print(Xraw.shape, Yraw.shape)
+# # Initialize points using botorch approach
+# # generate a large number of random samples
+# Xraw = bounds[0] + (bounds[1] - bounds[0]) * torch.rand(100 * NUM_RESTARTS,1, DESIGN_SPACE_DIM)
+# Yraw,_ = simulator(Xraw.squeeze())  # evaluate the acquisition function on these q-batches
+# print(Xraw.shape, Yraw.shape)
 
-# apply the heuristic for sampling promising initial conditions
-X = initialize_q_batch_nonneg(Xraw, Yraw, NUM_RESTARTS)
+# # apply the heuristic for sampling promising initial conditions
+# X = initialize_q_batch_nonneg(Xraw, Yraw, NUM_RESTARTS)
+
+# Initialize using random Sobol sequence sampling
+X = draw_sobol_samples(bounds=bounds, n=NUM_RESTARTS, q=1).to(device)
 
 # we'll want gradients for the input
 X.requires_grad_(True)
 
 # set up the optimizer, make sure to only pass in the candidate set here
-optimizer = torch.optim.Adam([X], lr=0.01)
+optimizer = torch.optim.Adam([X], lr=LEARNING_RATE)
 X_traj, loss_traj = [], []  # we'll store the results
 
 # run a basic optimization loop
@@ -131,9 +138,17 @@ with torch.no_grad():
         plt.savefig(SAVE_DIR+"comparision_%d.png"%i)
         plt.close()
 
+# Compute loss function on a grid for plotting
+grid_comps = get_twod_grid(30, bounds=bounds.cpu().numpy())
+grid_loss, grid_spectra = simulator(torch.from_numpy(grid_comps).to(device))
+
 optim_result = {"X_traj" : torch.stack(X_traj, dim=1).squeeze(),
                 "loss" : torch.stack(loss_traj, dim=1).squeeze(),
                 "spectra" : spectra_optim,
-                "target" : yt
+                "target_y" : yt,
+                "target_x" : xt,
+                "grid_loss" : grid_loss,
+                "grid_spectra" : grid_spectra,
+                "grid_comps" : grid_comps
                 }
 torch.save(optim_result, SAVE_DIR+"optim_traj.pkl")

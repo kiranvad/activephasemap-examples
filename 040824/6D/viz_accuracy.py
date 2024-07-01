@@ -89,6 +89,9 @@ def get_accuracy(comps, bounds, time, spectra, gp_model, np_model, use_torch=Fal
         x_target = tt.repeat(comp.shape[0]).view(comp.shape[0], len(time), 1)
         y_true = torch.from_numpy(spectra[i,:]).to(device)
 
+        if (y_true<0.01).all():
+            continue
+
         gp_model.eval()
         normalized_x = normalize(c, bounds.to(c))
         posterior = gp_model.posterior(normalized_x)

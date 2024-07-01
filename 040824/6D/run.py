@@ -1,4 +1,4 @@
-import os, shutil, argparse, json, time, datetime
+import os, shutil, argparse, json, time, datetime, pdb
 import numpy as np
 import matplotlib.pyplot as plt
 
@@ -10,6 +10,7 @@ from botorch.utils.transforms import normalize, unnormalize
 
 from activephasemap.models.utils import finetune_neural_process
 from activephasemap.models.np import NeuralProcess, context_target_split
+from activephasemap.models.gp import MultiTaskGP
 from activephasemap.utils.simulators import UVVisExperiment
 from activephasemap.utils.settings import *
 start = time.time()
@@ -53,8 +54,8 @@ bounds = torch.tensor(design_space_bounds).transpose(-1, -2).to(device)
 
 gp_model_args = {"model":"gp", 
                  "num_epochs" : 500, 
-                 "learning_rate" : 5e-2, 
-                 "verbose": 10
+                 "learning_rate" : 5e-1, 
+                 "verbose": 100
                  }
 np_model_args = {"num_iterations": 500, 
                  "verbose":100, 
@@ -66,22 +67,26 @@ np_model_args = {"num_iterations": 500,
 def featurize_spectra(np_model, comps_all, spectra_all):
     """ Obtain latent space embedding from spectra.
     """
-    num_draws = 16
+    num_draws = 32
     num_samples, n_domain = spectra_all.shape
     spectra = torch.zeros((num_samples, n_domain)).to(device)
     for i, si in enumerate(spectra_all):
         spectra[i] = torch.tensor(si).to(device)
     t = torch.linspace(0, 1, n_domain)
     t = t.repeat(num_samples, 1).to(device)
-    train_x, train_y = [], []
+    train_y, train_y_std = [], []
+    train_x = torch.from_numpy(comps_all).to(device)
+    y = []
     for _ in range(num_draws):
         with torch.no_grad():
-            train_x.append(torch.from_numpy(comps_all).to(device))
             x_context, y_context, _, _ = context_target_split(t.unsqueeze(2), spectra.unsqueeze(2), 25, 25)
             z, _ = np_model.xy_to_mu_sigma(x_context, y_context) 
-            train_y.append(z)
+        y.append(z)
 
-    return torch.cat(train_x).to(device), torch.cat(train_y).to(device)
+    train_y = torch.stack(y).mean(dim=0).to(device)
+    train_y_std = torch.stack(y).std(dim=0).to(device)
+
+    return train_x, train_y, train_y_std
 
 def run_iteration(expt):
     """ Perform a single iteration of active phasemapping.
@@ -102,10 +107,10 @@ def run_iteration(expt):
     torch.save(np_model.state_dict(), SAVE_DIR+'np_model_%d.pt'%ITERATION)
     np.save(SAVE_DIR+'np_loss_%d.npy'%ITERATION, np_loss)
 
-    train_x, train_y = featurize_spectra(np_model, comps_all, spectra_all)
+    train_x, train_y, train_y_std = featurize_spectra(np_model, comps_all, spectra_all)
     normalized_x = normalize(train_x, bounds).to(device)
     print("GP data shapes : ", normalized_x.shape, train_y.shape)
-    gp_model = initialize_model(normalized_x, train_y, gp_model_args, DESIGN_SPACE_DIM, N_LATENT, device) 
+    gp_model = MultiTaskGP(normalized_x, train_y, gp_model_args, DESIGN_SPACE_DIM, N_LATENT, train_y_std) 
     gp_loss = gp_model.fit() 
     torch.save(gp_model.state_dict(), SAVE_DIR+'gp_model_%d.pt'%ITERATION)
     np.save(SAVE_DIR+'gp_loss_%d.npy'%ITERATION, gp_loss)
@@ -175,7 +180,7 @@ else:
 
     # obtain new set of compositions to synthesize and their spectra
     comps_new, np_loss, np_model, gp_loss, gp_model = run_iteration(expt)
-    np.save(EXPT_DATA_DIR+'comps_%d.npy'%(ITERATION), comps_new)
+    # np.save(EXPT_DATA_DIR+'comps_%d.npy'%(ITERATION), comps_new)
 
     fig, axs = plt.subplots(1,2, figsize=(4*2, 4))
     axs[0].plot(np.arange(len(np_loss)), np_loss)
