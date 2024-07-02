@@ -74,22 +74,31 @@ def simulator(c):
     posterior = GP.posterior(normalized_x)
     z_samples = posterior.rsample(torch.Size([num_z_samples]))
     spectra_pred = torch.zeros((num_points, n_domain, 2)).to(device)
+    mu_mat = torch.zeros((num_points, n_domain)).to(device)
+    cov_mat = torch.zeros((num_points, n_domain, n_domain)).to(device)
     for i in range(num_points):
         zi = z_samples[:,i,:].squeeze(0)
         yi_samples = []
         for j in range(num_z_samples):
             zij = zi[j,:]
             yi_samples.append(NP.xz_to_y(xt, zij)[0])
-        spectra_pred[i,:, 0] = torch.cat(yi_samples).mean(dim=0).squeeze()
-        spectra_pred[i,:, 1] = torch.cat(yi_samples).std(dim=0).squeeze()
+        yi_samples = torch.cat(yi_samples)
+        spectra_pred[i,:, 0] = yi_samples.mean(dim=0).squeeze()
+        spectra_pred[i,:, 1] = yi_samples.std(dim=0).squeeze()
+        
+        yi_samples_ = yi_samples/yi_samples.max(dim=1).values[:,None]
+        mu_mat[i,...] = yi_samples_.mean(dim=0).squeeze()
+        k = yi_samples_.squeeze().T.cov()
+        k = torch.mm(k, k.T)
+        cov_mat[i,...] = k.add_(torch.eye(n_domain))
 
     target = yt.squeeze().repeat(num_points, 1)
     target_ = target/target.max(dim=1).values[:,None]
-    mu = spectra_pred[..., 0]
-    mu_ = mu/mu.max(dim=1).values[:,None]
-    loss = torch.nn.functional.mse_loss(mu_, target_, reduction="none")
 
-    return loss.mean(dim=1), spectra_pred
+    dist = torch.distributions.MultivariateNormal(mu_mat, cov_mat)
+    loss = dist.log_prob(target_)
+
+    return loss, spectra_pred
 
 # Initialize using random Sobol sequence sampling
 X = draw_sobol_samples(bounds=bounds, n=NUM_RESTARTS, q=1).to(device)
