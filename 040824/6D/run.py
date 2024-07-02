@@ -134,6 +134,7 @@ def run_iteration(expt):
 
     torch.save(train_x.cpu(), SAVE_DIR+"train_x_%d.pt" %ITERATION)
     torch.save(train_y.cpu(), SAVE_DIR+"train_y_%d.pt" %ITERATION)
+    torch.save(train_y_std.cpu(), SAVE_DIR+"train_y_std_%d.pt" %ITERATION)
 
 
     return new_x.cpu().numpy(), np_loss, np_model, gp_loss, gp_model
