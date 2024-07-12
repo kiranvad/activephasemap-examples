@@ -1,7 +1,7 @@
 import os, shutil, argparse, json, time, datetime, pdb
 import numpy as np
 import matplotlib.pyplot as plt
-
+from random import randint
 import torch
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 torch.set_default_dtype(torch.double)
@@ -13,6 +13,7 @@ from activephasemap.models.np import NeuralProcess, context_target_split
 from activephasemap.models.gp import MultiTaskGP
 from activephasemap.utils.simulators import UVVisExperiment
 from activephasemap.utils.settings import *
+from activephasemap.utils.visuals import *
 start = time.time()
 parser = argparse.ArgumentParser(
                     prog='peptide mediated gold nanoparticle synthesis experiment',
@@ -23,7 +24,7 @@ args = parser.parse_args()
 ITERATION = args.iteration # specify the current itereation number
 print("Running iteration %d"%ITERATION)
 # hyper-parameters
-BATCH_SIZE = 87
+BATCH_SIZE = 79
 N_INIT_POINTS = 72
 DESIGN_SPACE_DIM = 5
 
@@ -54,7 +55,7 @@ bounds = torch.tensor(design_space_bounds).transpose(-1, -2).to(device)
 
 gp_model_args = {"model":"gp", 
                  "num_epochs" : 500, 
-                 "learning_rate" : 5e-1, 
+                 "learning_rate" : 0.1, 
                  "verbose": 100
                  }
 np_model_args = {"num_iterations": 500, 
@@ -67,7 +68,7 @@ np_model_args = {"num_iterations": 500,
 def featurize_spectra(np_model, comps_all, spectra_all):
     """ Obtain latent space embedding from spectra.
     """
-    num_draws = 32
+    num_draws = 128
     num_samples, n_domain = spectra_all.shape
     spectra = torch.zeros((num_samples, n_domain)).to(device)
     for i, si in enumerate(spectra_all):
@@ -77,9 +78,15 @@ def featurize_spectra(np_model, comps_all, spectra_all):
     train_y, train_y_std = [], []
     train_x = torch.from_numpy(comps_all).to(device)
     y = []
+    # We approximate the z value of any given curve by multiple samples
+    # drawn from NP model with context target seperation
+    num_context = randint(3, int((n_domain/2)-3))
+    num_extra_target = randint(int(n_domain/2), int(n_domain/2)+2)
     for _ in range(num_draws):
         with torch.no_grad():
-            x_context, y_context, _, _ = context_target_split(t.unsqueeze(2), spectra.unsqueeze(2), 25, 25)
+            x_context, y_context, _, _ = context_target_split(t.unsqueeze(2), 
+                                                              spectra.unsqueeze(2), 
+                                                              num_context, num_extra_target)
             z, _ = np_model.xy_to_mu_sigma(x_context, y_context) 
         y.append(z)
 
@@ -136,9 +143,9 @@ def run_iteration(expt):
     torch.save(train_y.cpu(), SAVE_DIR+"train_y_%d.pt" %ITERATION)
     torch.save(train_y_std.cpu(), SAVE_DIR+"train_y_std_%d.pt" %ITERATION)
 
-
     return new_x.cpu().numpy(), np_loss, np_model, gp_loss, gp_model
 
+@torch.no_grad()
 def plot_model_accuracy(expt, gp_model, np_model):
     """ Plot accuracy of model predictions of experimental data
 
@@ -154,16 +161,32 @@ def plot_model_accuracy(expt, gp_model, np_model):
     for i in range(num_samples):
         fig, ax = plt.subplots()
         ci = expt.comps[i,:].reshape(1, c_dim)
-        with torch.no_grad():
-            mu, sigma = from_comp_to_spectrum(expt, gp_model, np_model, ci)
-            mu_ = mu.cpu().squeeze()
-            sigma_ = sigma.cpu().squeeze()
-            ax.plot(expt.wl, mu_)
-            ax.fill_between(expt.wl, mu_-sigma_, mu_+sigma_, color='grey')
+        mu, sigma = from_comp_to_spectrum(expt, gp_model, np_model, ci)
+        mu_ = mu.cpu().squeeze()
+        sigma_ = sigma.cpu().squeeze()
+        ax.plot(expt.wl, mu_)
+        ax.fill_between(expt.wl, mu_-sigma_, mu_+sigma_, color='grey')
         ax.scatter(expt.wl, expt.F[i], color='k')
         plt.savefig(iter_plot_dir+'%d.png'%(i))
         plt.close()
 
+@torch.no_grad()
+def plot_gp_accuracy(gp_model):
+    train_x = torch.load(SAVE_DIR+"train_x_%d.pt"%ITERATION).to(device)
+    train_y = torch.load(SAVE_DIR+"train_y_%d.pt"%ITERATION).numpy()
+    num_samples, z_dim = train_y.shape
+    normalized_x = normalize(train_x, bounds).to(device)
+    posterior = gp_model.posterior(normalized_x)
+    z_pred = posterior.mean.cpu().numpy()
+    fig, axs = plt.subplots(1, z_dim, figsize=(z_dim*4, 4))
+    for i in range(z_dim):
+        sns.kdeplot(train_y[:,i], ax=axs[i], fill=True, label='NP Model')
+        sns.kdeplot(z_pred[:,i], ax=axs[i],fill=True, label='GP Model')
+        axs[i].set_xlabel('z_%d'%(i+1)) 
+        axs[i].legend()
+
+    return fig, ax
+    
 # Set up a synthetic data emulating an experiment
 if ITERATION == 0:
     init_x = initialize_points(bounds, N_INIT_POINTS, device)
@@ -181,7 +204,7 @@ else:
 
     # obtain new set of compositions to synthesize and their spectra
     comps_new, np_loss, np_model, gp_loss, gp_model = run_iteration(expt)
-    # np.save(EXPT_DATA_DIR+'comps_%d.npy'%(ITERATION), comps_new)
+    np.save(EXPT_DATA_DIR+'comps_%d.npy'%(ITERATION), comps_new)
 
     fig, axs = plt.subplots(1,2, figsize=(4*2, 4))
     axs[0].plot(np.arange(len(np_loss)), np_loss)
@@ -189,7 +212,11 @@ else:
     axs[1].plot(np.arange(len(gp_loss)), gp_loss)
     axs[1].set_title("GP-Loss")
     plt.savefig(PLOT_DIR+'loss_%d.png'%ITERATION)
-    plt.close()      
+    plt.close()  
+
+    plot_gp_accuracy(gp_model)    
+    plt.savefig(PLOT_DIR+'gp_%d.png'%ITERATION)
+    plt.close()
 
     plot_model_accuracy(expt, gp_model, np_model)
 

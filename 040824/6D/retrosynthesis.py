@@ -10,7 +10,7 @@ from botorch.utils.sampling import draw_sobol_samples
 torch.set_default_dtype(torch.double)
 from botorch.utils.transforms import normalize, unnormalize
 from botorch.optim.initializers import initialize_q_batch_nonneg
-from torch.distributions import Normal
+from gpytorch.distributions import MultivariateNormal as mvn
 
 from activephasemap.models.np import NeuralProcess, context_target_split
 from activephasemap.models.gp import MultiTaskGP
@@ -19,7 +19,7 @@ from activephasemap.utils.settings import initialize_model
 from activephasemap.utils.settings import get_twod_grid
 
 
-TRAINING_ITERATIONS = 1000 # total iterations for each optimization
+TRAINING_ITERATIONS = 100 # total iterations for each optimization
 NUM_RESTARTS = 8 # number of optimization from random restarts
 LEARNING_RATE = 0.1
 TARGET_SHAPE = "triangle" # chose from ["sphere", "triangle"]
@@ -31,21 +31,22 @@ os.makedirs(SAVE_DIR)
 
 gp_model_args = {"model":"gp", "num_epochs" : 1, "learning_rate" : 1e-3, "verbose": 1}
 DATA_DIR = './output'
-ITERATION = len(glob.glob("./data/spectra_*.npy"))-1
+ITERATION = len(glob.glob("./data/gp_model_*.npy"))
 with open('/mmfs1/home/kiranvad/cheme-kiranvad/activephasemap-examples/pretrained/UVVis/best_config.json') as f:
     best_np_config = json.load(f)
 N_LATENT = best_np_config["z_dim"]
-DESIGN_SPACE_DIM = 5
+
 design_space_bounds = [(0.0, 75.0),
                        (0.0, 75.0),
                        (0.0, 75.0),
                        (0.0, 75.0), 
                        (0.0, 11.0),
                        ]
+DESIGN_SPACE_DIM = len(design_space_bounds)
 bounds = torch.tensor(design_space_bounds).transpose(-1, -2).to(device)
 
 # Create a target spectrum
-target = np.load("./data/target_%s.npz"%TARGET_SHAPE)
+target = np.load("../pygdm/target_%s.npz"%TARGET_SHAPE)
 wav = target["x"]
 n_domain = len(wav)
 t = (wav-min(wav))/(max(wav)-min(wav))
@@ -55,7 +56,7 @@ yt = torch.from_numpy(target["y"]).to(device).view(1, n_domain, 1)
 # Load GP and NP models and set them to evaluation mode
 train_x = torch.load(DATA_DIR+'/train_x_%d.pt'%ITERATION, map_location=device)
 train_y = torch.load(DATA_DIR+'/train_y_%d.pt'%ITERATION, map_location=device)
-train_y_std = 0.1*torch.ones_like(train_y)
+train_y_std = torch.load(DATA_DIR+'/train_y_std%d.pt'%ITERATION, map_location=device)
 normalized_x = normalize(train_x, bounds).to(train_x)
 print(normalized_x.max(), normalized_x.min())
 GP = MultiTaskGP(normalized_x, train_y, gp_model_args, DESIGN_SPACE_DIM, N_LATENT, train_y_std)
@@ -67,36 +68,32 @@ NP = NeuralProcess(best_np_config["r_dim"], N_LATENT, best_np_config["h_dim"]).t
 NP.load_state_dict(torch.load(DATA_DIR+'/np_model_%d.pt'%ITERATION, map_location=device)) 
 NP.train(False)
 
+def from_comp_to_spectrum(gp_model, np_model, t, c, bounds):
+    normalized_x = normalize(c, bounds)
+    posterior = gp_model.posterior(normalized_x)
+    mu = []
+    for _ in range(128):
+        z = posterior.rsample().squeeze(0)
+        mu_i, _ = np_model.xz_to_y(t, z)
+        mu.append(mu_i)
+
+    mean_pred = torch.cat(mu).mean(dim=0, keepdim=True)
+    sigma_pred = torch.cat(mu).std(dim=0, keepdim=True)
+
+    return mean_pred, sigma_pred 
+
 def simulator(c):
     num_points, dim = c.shape 
-    num_z_samples = 16
-    normalized_x = normalize(c, bounds)
-    posterior = GP.posterior(normalized_x)
-    z_samples = posterior.rsample(torch.Size([num_z_samples]))
     spectra_pred = torch.zeros((num_points, n_domain, 2)).to(device)
-    mu_mat = torch.zeros((num_points, n_domain)).to(device)
-    cov_mat = torch.zeros((num_points, n_domain, n_domain)).to(device)
     for i in range(num_points):
-        zi = z_samples[:,i,:].squeeze(0)
-        yi_samples = []
-        for j in range(num_z_samples):
-            zij = zi[j,:]
-            yi_samples.append(NP.xz_to_y(xt, zij)[0])
-        yi_samples = torch.cat(yi_samples)
-        spectra_pred[i,:, 0] = yi_samples.mean(dim=0).squeeze()
-        spectra_pred[i,:, 1] = yi_samples.std(dim=0).squeeze()
-        
-        yi_samples_ = yi_samples/yi_samples.max(dim=1).values[:,None]
-        mu_mat[i,...] = yi_samples_.mean(dim=0).squeeze()
-        k = yi_samples_.squeeze().T.cov()
-        k = torch.mm(k, k.T)
-        cov_mat[i,...] = k.add_(torch.eye(n_domain))
+        ci = c[i,:].reshape(1, DESIGN_SPACE_DIM)
+        mu, sigma = from_comp_to_spectrum(GP, NP, xt, ci, bounds)
+        spectra_pred[i,:, 0] = mu.squeeze()
+        spectra_pred[i,:, 1] = sigma.squeeze()
 
     target = yt.squeeze().repeat(num_points, 1)
-    target_ = target/target.max(dim=1).values[:,None]
 
-    dist = torch.distributions.MultivariateNormal(mu_mat, cov_mat)
-    loss = dist.log_prob(target_)
+    loss = torch.nn.functional.mse_loss(spectra_pred[..., 0], target, reduction="none").mean(dim=1)
 
     return loss, spectra_pred
 
@@ -105,13 +102,13 @@ X = draw_sobol_samples(bounds=bounds, n=NUM_RESTARTS, q=1).to(device)
 X.requires_grad_(True)
 
 optimizer = torch.optim.Adam([X], lr=LEARNING_RATE)
-X_traj, loss_traj = [], [] 
+X_traj, loss_traj, spectra_traj = [], [], []
 
 # run a basic optimization loop
 for i in range(TRAINING_ITERATIONS):
     optimizer.zero_grad()
-    # this performs batch evaluation, so this is an N-dim tensor
-    losses,_ = simulator(X.squeeze()) 
+    # this performs batch (num_restrats) evaluation
+    losses, spectra = simulator(X.squeeze()) 
     loss = losses.sum()
 
     loss.backward()  
@@ -119,11 +116,12 @@ for i in range(TRAINING_ITERATIONS):
 
     # clamp values to the feasible set
     for j, (lb, ub) in enumerate(zip(*bounds)):
-        X.data[..., j].clamp_(lb, ub)  # need to do this on the data not X itself
+        X.data[..., j].clamp_(lb, ub) 
 
     # store the optimization trajecatory
     X_traj.append(X.detach().clone())
     loss_traj.append(losses.detach().clone())
+    spectra_traj.append(spectra.detach().clone())
 
     if (i + 1) % 10 == 0:
         print(f"Iteration {i+1:>3}/{TRAINING_ITERATIONS:>3} - Loss: {loss.item():>4.3f}")
@@ -147,6 +145,7 @@ with torch.no_grad():
 
 # Compute loss function on a grid for plotting
 optim_result = {"X_traj" : torch.stack(X_traj, dim=1).squeeze(),
+                "spectra_traj" : torch.stack(spectra_traj, dim=1).squeeze(),
                 "loss" : torch.stack(loss_traj, dim=1).squeeze(),
                 "spectra" : spectra_optim,
                 "target_y" : yt,
