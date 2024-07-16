@@ -10,6 +10,7 @@ from botorch.utils.transforms import normalize, unnormalize
 from activephasemap.models.utils import finetune_neural_process
 from activephasemap.models.np import NeuralProcess, context_target_split
 from activephasemap.models.svgp import MultiTaskSVGP
+from activephasemap.utils.acquisition import UncertainitySelector
 from activephasemap.utils.simulators import UVVisExperiment
 from activephasemap.utils.settings import *
 from activephasemap.utils.visuals import *
@@ -48,13 +49,12 @@ if ITERATION==0:
 design_space_bounds = [(0.0, 87.0), (0.0,11.0)]
 bounds = torch.tensor(design_space_bounds).transpose(-1, -2).to(device)
 
-gp_model_args = {"model":"gp", 
-                 "num_epochs" : 50, 
-                 "learning_rate" : 0.01, 
-                 "verbose": 100,
-                 "num_latents" : 4
+gp_model_args = {"num_epochs" : 100, 
+                 "learning_rate" : 0.005, 
+                 "verbose": 25,
+                 "debug" : False
                  }
-np_model_args = {"num_iterations": 50, 
+np_model_args = {"num_iterations": 500, 
                  "verbose":100, 
                  "lr":best_np_config["lr"], 
                  "batch_size": best_np_config["batch_size"]
@@ -106,14 +106,16 @@ def run_iteration(expt):
     np.save(SAVE_DIR+'np_loss_%d.npy'%ITERATION, np_loss)
 
     train_x, train_y = featurize_spectra(np_model, comps_all, spectra_all)
+    print("GP input and output shapes : ", train_x.shape, train_y.shape)
     normalized_x = normalize(train_x, bounds)
-    gp_model = MultiTaskSVGP(normalized_x, train_y, gp_model_args, DESIGN_SPACE_DIM, N_LATENT)
+    gp_model = MultiTaskSVGP(normalized_x, train_y, **gp_model_args)
     gp_loss = gp_model.fit()
     torch.save(gp_model.state_dict(), SAVE_DIR+'gp_model_%d.pt'%ITERATION)
     np.save(SAVE_DIR+'gp_loss_%d.npy'%ITERATION, gp_loss)
 
     print("Collecting next data points to sample by acqusition optimization...")
-    new_x, acqf = optimize_acqf(gp_model, bounds, BATCH_SIZE, num_restarts=16)
+    acqf = UncertainitySelector(expt.dim, gp_model, bounds)
+    new_x = acqf.optimize(BATCH_SIZE)
 
     torch.save(train_x.cpu(), SAVE_DIR+"train_x_%d.pt" %ITERATION)
     torch.save(train_y.cpu(), SAVE_DIR+"train_y_%d.pt" %ITERATION)

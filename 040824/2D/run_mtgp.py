@@ -5,12 +5,12 @@ from random import randint
 import torch
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 torch.set_default_dtype(torch.double)
-from botorch.optim import optimize_acqf
 from botorch.utils.transforms import normalize, unnormalize
 
 from activephasemap.models.utils import finetune_neural_process
 from activephasemap.models.np import NeuralProcess, context_target_split
-from activephasemap.models.gp import MultiTaskGP
+from activephasemap.models.mtgp import MultiTaskGPVersion2
+from activephasemap.utils.acquisition import UncertainitySelector
 from activephasemap.utils.simulators import UVVisExperiment
 from activephasemap.utils.settings import *
 from activephasemap.utils.visuals import *
@@ -27,7 +27,7 @@ print("Running iteration %d"%ITERATION)
 BATCH_SIZE = 8
 N_INIT_POINTS = 24
 DESIGN_SPACE_DIM = 2
-NUM_Z_DRAWS = 8
+NUM_Z_DRAWS = 16
 
 EXPT_DATA_DIR = "./data/"
 SAVE_DIR = "./output/"
@@ -49,12 +49,11 @@ if ITERATION==0:
 design_space_bounds = [(0.0, 87.0), (0.0,11.0)]
 bounds = torch.tensor(design_space_bounds).transpose(-1, -2).to(device)
 
-gp_model_args = {"model":"gp", 
-                 "num_epochs" : 50, 
+gp_model_args = {"num_epochs" : 500, 
                  "learning_rate" : 0.01, 
                  "verbose": 100,
                  }
-np_model_args = {"num_iterations": 50, 
+np_model_args = {"num_iterations": 500, 
                  "verbose":100, 
                  "lr":best_np_config["lr"], 
                  "batch_size": best_np_config["batch_size"]
@@ -70,21 +69,15 @@ def featurize_spectra(np_model, comps_all, spectra_all):
         spectra[i] = torch.tensor(si).to(device)
     t = torch.linspace(0, 1, n_domain)
     t = t.repeat(num_samples, 1).to(device)
-    train_x, train_y = [], []
-    # We approximate the z value of any given curve by multiple samples
-    # drawn from NP model with context target seperation
-    num_context = randint(3, int((n_domain/2)-3))
-    num_extra_target = randint(int(n_domain/2), int(n_domain/2)+2)
-    for _ in range(NUM_Z_DRAWS):
-        with torch.no_grad():
-            train_x.append(torch.from_numpy(comps_all).to(device))
-            x_context, y_context, _, _ = context_target_split(t.unsqueeze(2), 
-                                                              spectra.unsqueeze(2), 
-                                                              num_context, num_extra_target)
-            z, _ = np_model.xy_to_mu_sigma(x_context, y_context) 
-            train_y.append(z)
+    with torch.no_grad():
+        z_mean, z_std = np_model.xy_to_mu_sigma(t.unsqueeze(2), spectra.unsqueeze(2)) 
+        z_dist = torch.distributions.normal.Normal(z_mean, z_std)
+  
+    train_x = torch.from_numpy(comps_all).repeat(NUM_Z_DRAWS, 1)
+    train_y = z_dist.sample(torch.Size([NUM_Z_DRAWS]))
+    train_y = train_y.reshape(num_samples*NUM_Z_DRAWS, z_dist.mean.shape[1])
 
-    return torch.cat(train_x), torch.cat(train_y)
+    return train_x.to(device), train_y.to(device)
 
 def run_iteration(expt):
     """ Perform a single iteration of active phasemapping.
@@ -106,38 +99,21 @@ def run_iteration(expt):
     np.save(SAVE_DIR+'np_loss_%d.npy'%ITERATION, np_loss)
 
     train_x, train_y = featurize_spectra(np_model, comps_all, spectra_all)
+    print("GP input and output shapes : ", train_x.shape, train_y.shape)
     normalized_x = normalize(train_x, bounds)
-    # for i in range(train_x.shape[0]):
-    #     print(i, train_x[i,:], normalized_x[i,:], train_y[i,:])
-
-    # print("Range of normalized compositions : ", normalized_x.min(), normalized_x.max())
-    gp_model = MultiTaskGP(normalized_x, train_y, gp_model_args, DESIGN_SPACE_DIM, N_LATENT, None) 
+    gp_model = MultiTaskGPVersion2(normalized_x, train_y, **gp_model_args)
     gp_loss = gp_model.fit()
     torch.save(gp_model.state_dict(), SAVE_DIR+'gp_model_%d.pt'%ITERATION)
     np.save(SAVE_DIR+'gp_loss_%d.npy'%ITERATION, gp_loss)
 
     print("Collecting next data points to sample by acqusition optimization...")
-    acquisition = construct_acqf_by_model(gp_model, normalized_x, train_y, N_LATENT)
-    standard_bounds = torch.tensor([(float(1e-5), 1.0) for _ in range(DESIGN_SPACE_DIM)]).transpose(-1, -2).to(device)
-    pdb.set_trace()
-    normalized_candidates, acqf_values = optimize_acqf(
-        acquisition, 
-        standard_bounds, 
-        q=BATCH_SIZE, 
-        num_restarts=20, 
-        raw_samples=1024, 
-        return_best_only=True,
-        sequential=False,
-        options={"batch_limit": 1, "maxiter": 10, "with_grad":True}
-        )
-
-    # calculate acquisition values after rounding
-    new_x = unnormalize(normalized_candidates.detach(), bounds=bounds) 
+    acqf = UncertainitySelector(expt.dim, gp_model, bounds)
+    new_x = acqf.optimize(BATCH_SIZE)
 
     torch.save(train_x.cpu(), SAVE_DIR+"train_x_%d.pt" %ITERATION)
     torch.save(train_y.cpu(), SAVE_DIR+"train_y_%d.pt" %ITERATION)
 
-    return new_x.cpu().numpy(), np_loss, np_model, gp_loss, gp_model, acquisition, train_x.cpu().numpy()
+    return new_x.detach().cpu().numpy(), np_loss, np_model, gp_loss, gp_model, acqf, train_x.cpu().numpy()
 
 def plot_model_accuracy(expt, gp_model, np_model):
     """ Plot accuracy of model predictions of experimental data
@@ -182,7 +158,7 @@ else:
 
     # obtain new set of compositions to synthesize and their spectra
     comps_new, np_loss, np_model, gp_loss, gp_model, acquisition, train_x = run_iteration(expt)
-    np.save(EXPT_DATA_DIR+'comps_%d.npy'%(ITERATION), comps_new)
+    # np.save(EXPT_DATA_DIR+'comps_%d.npy'%(ITERATION), comps_new)
 
     fig, axs = plt.subplots(1,2, figsize=(4*2, 4))
     axs[0].plot(np.arange(len(np_loss)), np_loss)

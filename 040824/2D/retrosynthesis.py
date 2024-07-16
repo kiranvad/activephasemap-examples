@@ -13,7 +13,7 @@ from botorch.optim.initializers import initialize_q_batch_nonneg
 from gpytorch.distributions import MultivariateNormal as mvn
 
 from activephasemap.models.np import NeuralProcess, context_target_split
-from activephasemap.models.gp import MultiTaskGP
+from activephasemap.models.svgp import MultiTaskSVGP
 from activephasemap.utils.simulators import GNPPhases
 from activephasemap.utils.settings import initialize_model 
 from activephasemap.utils.settings import get_twod_grid
@@ -21,7 +21,7 @@ from activephasemap.utils.settings import get_twod_grid
 TRAINING_ITERATIONS = 100 # total iterations for each optimization
 NUM_RESTARTS = 8 # number of optimization from random restarts
 LEARNING_RATE = 0.1
-TARGET_SHAPE = "triangle" # chose from ["sphere", "triangle"]
+TARGET_SHAPE = "sphere" # chose from ["sphere", "triangle"]
 
 SAVE_DIR = "./retrosynthesis/%s/"%TARGET_SHAPE
 if os.path.exists(SAVE_DIR):
@@ -30,7 +30,7 @@ os.makedirs(SAVE_DIR)
 
 gp_model_args = {"model":"gp", "num_epochs" : 1, "learning_rate" : 1e-3, "verbose": 1}
 DATA_DIR = './output'
-ITERATION = len(glob.glob("./data/spectra_*.npy"))-1
+ITERATION = len(glob.glob("./output/gp_model_*.pt"))
 with open('/mmfs1/home/kiranvad/cheme-kiranvad/activephasemap-examples/pretrained/UVVis/best_config.json') as f:
     best_np_config = json.load(f)
 N_LATENT = best_np_config["z_dim"]
@@ -51,10 +51,9 @@ yt = torch.from_numpy(target["y"]).to(device).view(1, n_domain, 1)
 print("Using models from iteration %d"%ITERATION)
 train_x = torch.load(DATA_DIR+'/train_x_%d.pt'%ITERATION, map_location=device)
 train_y = torch.load(DATA_DIR+'/train_y_%d.pt'%ITERATION, map_location=device)
-train_y_std = torch.load(DATA_DIR+'/train_y_std_%d.pt'%ITERATION, map_location=device)
 normalized_x = normalize(train_x, bounds).to(train_x)
 print(normalized_x.max(), normalized_x.min())
-GP = MultiTaskGP(normalized_x, train_y, gp_model_args, DESIGN_SPACE_DIM, N_LATENT, train_y_std)
+GP = MultiTaskSVGP(normalized_x, train_y, **gp_model_args)
 gp_state_dict = torch.load(DATA_DIR+'/gp_model_%d.pt'%ITERATION, map_location=device)
 GP.load_state_dict(gp_state_dict)
 GP.train(False)

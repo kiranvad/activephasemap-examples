@@ -9,16 +9,17 @@ torch.set_default_dtype(torch.double)
 from botorch.utils.transforms import normalize
 
 from activephasemap.models.np import NeuralProcess
-from activephasemap.models.gp import MultiTaskGP
+from activephasemap.models.mtgp import MultiTaskGPVersion2 as GP
 from activephasemap.utils.simulators import UVVisExperiment
 from activephasemap.utils.settings import from_comp_to_spectrum, get_twod_grid, AutoPhaseMapDataSet
 
 from scipy.stats import qmc
+from tqdm import tqdm
 
 # Specify variables
 DATA_DIR = "./"
 SAVE_DIR = "./grid/"
-ITERATION = len(glob.glob(DATA_DIR+"data/spectra_*.npy"))
+ITERATION = len(glob.glob(DATA_DIR+"output/gp_model_*.pt"))
 print("Using data until %d iterations"%ITERATION)
 design_space_bounds = [(0.0, 87.0), (0.0,11.0)]
 
@@ -33,7 +34,6 @@ N_LATENT = best_np_config["z_dim"]
 
 expt = UVVisExperiment(design_space_bounds, ITERATION, DATA_DIR+"/data/")
 expt.generate(use_spline=True)
-gp_model_args = {"model":"gp", "num_epochs" : 1, "learning_rate" : 1e-3, "verbose": 1}
 
 # Load trained GP model for p(z|c)
 train_x = torch.load(DATA_DIR+'/output/train_x_%d.pt'%ITERATION, map_location=device)
@@ -41,7 +41,7 @@ train_y = torch.load(DATA_DIR+'/output/train_y_%d.pt'%ITERATION, map_location=de
 train_y_std = 0.1*torch.ones_like(train_y)
 bounds = expt.bounds.to(device)
 normalized_x = normalize(train_x, bounds).to(train_x)
-gp_model = MultiTaskGP(normalized_x, train_y, gp_model_args, expt.dim, N_LATENT, train_y_std)
+gp_model = GP(normalized_x, train_y)
 gp_state_dict = torch.load(DATA_DIR+'/output/gp_model_%d.pt'%(ITERATION), map_location=device)
 gp_model.load_state_dict(gp_state_dict)
 
@@ -69,7 +69,7 @@ plt.close()
 n_spectra_dim =  expt.t.shape[0]
 grid_spectra = np.zeros((N_GRID_SAMPLES, n_spectra_dim))
 with torch.no_grad():
-    for i in range(N_GRID_SAMPLES):
+    for i in tqdm(range(N_GRID_SAMPLES)):
         mu, _ = from_comp_to_spectrum(expt, 
                                       gp_model,
                                       np_model, 
