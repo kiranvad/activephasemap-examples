@@ -9,7 +9,7 @@ from botorch.utils.transforms import normalize, unnormalize
 
 from activephasemap.models.utils import finetune_neural_process
 from activephasemap.models.np import NeuralProcess, context_target_split
-from activephasemap.models.mtgp import MultiTaskGPVersion2
+from activephasemap.models.mtgp import MultiTaskGPVersion2 as GaussianProcess
 from activephasemap.utils.acquisition import UncertainitySelector
 from activephasemap.utils.simulators import UVVisExperiment
 from activephasemap.utils.settings import *
@@ -50,7 +50,7 @@ design_space_bounds = [(0.0, 87.0), (0.0,11.0)]
 bounds = torch.tensor(design_space_bounds).transpose(-1, -2).to(device)
 
 gp_model_args = {"num_epochs" : 500, 
-                 "learning_rate" : 0.01, 
+                 "learning_rate" : 0.005, 
                  "verbose": 100,
                  }
 np_model_args = {"num_iterations": 500, 
@@ -101,7 +101,7 @@ def run_iteration(expt):
     train_x, train_y = featurize_spectra(np_model, comps_all, spectra_all)
     print("GP input and output shapes : ", train_x.shape, train_y.shape)
     normalized_x = normalize(train_x, bounds)
-    gp_model = MultiTaskGPVersion2(normalized_x, train_y, **gp_model_args)
+    gp_model = GaussianProcess(normalized_x, train_y, **gp_model_args)
     gp_loss = gp_model.fit()
     torch.save(gp_model.state_dict(), SAVE_DIR+'gp_model_%d.pt'%ITERATION)
     np.save(SAVE_DIR+'gp_loss_%d.npy'%ITERATION, gp_loss)

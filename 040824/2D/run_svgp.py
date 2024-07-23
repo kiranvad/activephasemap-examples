@@ -49,9 +49,9 @@ if ITERATION==0:
 design_space_bounds = [(0.0, 87.0), (0.0,11.0)]
 bounds = torch.tensor(design_space_bounds).transpose(-1, -2).to(device)
 
-gp_model_args = {"num_epochs" : 100, 
-                 "learning_rate" : 0.005, 
-                 "verbose": 25,
+gp_model_args = {"num_epochs" : 1000, 
+                 "learning_rate" : 0.05, 
+                 "verbose": 200,
                  "debug" : False
                  }
 np_model_args = {"num_iterations": 500, 
