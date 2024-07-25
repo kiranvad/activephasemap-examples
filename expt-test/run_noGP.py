@@ -33,8 +33,8 @@ args = parser.parse_args()
 ITERATION = args.iteration # specify the current itereation number
 
 # hyper-parameters
-BATCH_SIZE = 5
-N_INIT_POINTS = 10
+BATCH_SIZE = 12
+N_INIT_POINTS = 24
 MODEL_NAME = "gp"
 SIMULATOR = "goldnano"
 DATA_DIR = "../AuNP/gold_nano_grid/"
@@ -64,9 +64,9 @@ sim.generate()
 design_space_bounds = [(0.0, 7.38), (0.0,7.27)]
 bounds = torch.tensor(design_space_bounds).transpose(-1, -2).to(device)
 
-mlp_model_args = {"num_epochs" : 500, 
+mlp_model_args = {"num_epochs" : 100, 
                  "learning_rate" : 1e-2, 
-                 "verbose": 100,
+                 "verbose": 25,
                  }
 
 np_model_args = {"num_iterations": 500, 
@@ -75,6 +75,11 @@ np_model_args = {"num_iterations": 500,
                  "batch_size": best_np_config["batch_size"]
                  }
 
+@torch.no_grad
+def print_matrix(A):
+    A = pd.DataFrame(A.cpu().numpy())
+    A.columns = ['']*A.shape[1]
+    print(A.to_string())
 
 """ Helper functions """
 def featurize_spectra(np_model, comps_all, spectra_all):
@@ -90,6 +95,9 @@ def featurize_spectra(np_model, comps_all, spectra_all):
         z_mean, z_std = np_model.xy_to_mu_sigma(t.unsqueeze(2), spectra.unsqueeze(2)) 
   
     train_x = torch.from_numpy(comps_all)
+
+    print("Std of latent variable ...: ")
+    print_matrix(z_std)
 
     return train_x, z_mean, z_std
 
