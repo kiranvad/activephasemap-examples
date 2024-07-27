@@ -17,8 +17,8 @@ from scipy.stats import qmc
 from tqdm import tqdm
 
 # Specify variables
-DATA_DIR = "./"
-SAVE_DIR = "./grid/"
+DATA_DIR = "/mmfs1/home/kiranvad/cheme-kiranvad/activephasemap-examples/040824/2D_repeat/"
+SAVE_DIR = DATA_DIR+"grid/"
 ITERATION = 8
 design_space_bounds = [(0.0, 87.0), (0.0,11.0)]
 
@@ -72,13 +72,17 @@ NP = NeuralProcess(best_np_config["r_dim"], N_LATENT, best_np_config["h_dim"]).t
 NP.load_state_dict(torch.load(DATA_DIR+'/np_model_%d.pt'%(ITERATION), map_location=device))
 
 # Construct data on a grid
-N_GRID_SAMPLES = 2000
-sampler = qmc.LatinHypercube(d=2)
-sample = sampler.random(n=N_GRID_SAMPLES)
 
-x = design_space_bounds[0][0] + sample[:,0]*(design_space_bounds[0][1] - design_space_bounds[0][0])
-y = design_space_bounds[1][0] + sample[:,1]*(design_space_bounds[1][1] - design_space_bounds[1][0])
-grid_comps = np.vstack((x,y)).T
+# N_GRID_SAMPLES = 500
+# sampler = qmc.LatinHypercube(d=2)
+# sample = sampler.random(n=N_GRID_SAMPLES)
+
+# x = design_space_bounds[0][0] + sample[:,0]*(design_space_bounds[0][1] - design_space_bounds[0][0])
+# y = design_space_bounds[1][0] + sample[:,1]*(design_space_bounds[1][1] - design_space_bounds[1][0])
+# grid_comps = np.vstack((x,y)).T
+
+grid_comps = get_twod_grid(30, bounds)
+N_GRID_SAMPLES = grid_comps.shape[0]
 
 fig, ax = plt.subplots()
 ax.scatter(grid_comps[:,0], grid_comps[:,1])

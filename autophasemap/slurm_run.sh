@@ -3,8 +3,8 @@
 #SBATCH --job-name=activephasemap
 #SBATCH --account=cheme
 #SBATCH --partition=compute
-#SBATCH --nodes=4
-#SBATCH --time=02:00:00
+#SBATCH --nodes=2
+#SBATCH --time=01:00:00
 #SBATCH --mem=64G
 #SBATCH --output=./slurm/%j.out
 #SBATCH --error=./slurm/%j.err
@@ -64,6 +64,7 @@ done
 ##############################################################################################
 
 echo "Launch Python job"
-python3 -u ./activephasemap/run.py
+python3 -u ./make_grid.py
+python3 -u ./run.py
 echo "All Done!"
 exit

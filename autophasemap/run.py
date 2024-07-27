@@ -6,38 +6,18 @@ import ray
 import torch
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 torch.set_default_dtype(torch.double)
-from botorch.utils.transforms import normalize
-
-from activephasemap.np.neural_process import NeuralProcess
-from activephasemap.utils.settings import initialize_model
-from activephasemap.test_functions.phasemaps import ExperimentalTestFunction
-from activephasemap.utils.simulators import GNPPhases, UVVisExperiment
-import matplotlib.ticker as ticker
-from activephasemap.utils.settings import from_comp_to_spectrum, get_twod_grid, AutoPhaseMapDataSet
-from activephasemap.utils.visuals import MinMaxScaler, scaled_tickformat, _inset_spectra 
 
 from autophasemap import multi_kmeans_run, compute_BIC
+from activephasemap.utils.settings import AutoPhaseMapDataSet
 
 # Specify variables
-N_INIT_RUNS = 5
-MAX_ITER = 20
+N_INIT_RUNS = 10
+MAX_ITER = 100
 VERBOSE = 3
-GAMMA_GRID_N = 30
-ACTIVEPHASEMAP_EXPT = "expt-test"
-
-if ACTIVEPHASEMAP_EXPT=="expt-test":
-    N_CLUSTERS = 4
-    SAVE_DIR = "/mmfs1/home/kiranvad/kiranvad/papers/autophasemap/expts"+'/output/expt-test_single/'
-    ITERATION = 8
-    DATA_DIR = "/mmfs1/home/kiranvad/kiranvad/activephasemap-examples/expt-test"
-    design_space_bounds = [(0.0, 7.38), (0.0,7.27)]
-elif ACTIVEPHASEMAP_EXPT=="peptide_aunp_2D":
-    N_CLUSTERS = 3
-    SAVE_DIR = "/mmfs1/home/kiranvad/kiranvad/papers/autophasemap/expts"+'/output/peptide_aunp_2D_single/'
-    ITERATION = 3
-    DATA_DIR = "/mmfs1/home/kiranvad/kiranvad/040824/2D/"
-    design_space_bounds = [(0.0, 87.0), (0.0,11.0)]
-
+GAMMA_GRID_N = 10
+N_CLUSTERS = 2
+DATA_DIR = "/mmfs1/home/kiranvad/cheme-kiranvad/activephasemap-examples/040824/2D_repeat"
+SAVE_DIR = DATA_DIR+"/autophasemap/"
 if os.path.exists(SAVE_DIR):
     shutil.rmtree(SAVE_DIR)
 os.makedirs(SAVE_DIR)
@@ -49,13 +29,12 @@ else:
     ray.init(address='auto', _node_ip_address=os.environ["ip_head"].split(":")[0],
         _redis_password=os.environ["redis_password"])
 
-
 grid_comps = np.load(DATA_DIR+"/grid/grid_comps.npy")
 grid_spectra = np.load(DATA_DIR+"/grid/grid_spectra.npy")
 t = np.linspace(0,1, grid_spectra.shape[1])
 
 data = AutoPhaseMapDataSet(grid_comps,t, grid_spectra)
-data.generate(process="normalize")
+data.generate()
 
 def plot(data, out):
     fig, axs = plt.subplots(1,N_CLUSTERS+1, figsize=(4*(N_CLUSTERS+1), 4))
