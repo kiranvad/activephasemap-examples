@@ -16,7 +16,7 @@ from activephasemap.models.np import NeuralProcess, context_target_split
 from activephasemap.models.svgp import MultiTaskSVGP
 from activephasemap.utils.simulators import GNPPhases
 from activephasemap.utils.settings import initialize_model 
-from activephasemap.utils.settings import get_twod_grid
+from activephasemap.utils.visuals import get_twod_grid
 
 TRAINING_ITERATIONS = 100 # total iterations for each optimization
 NUM_RESTARTS = 8 # number of optimization from random restarts
@@ -40,7 +40,8 @@ bounds = torch.tensor(design_space_bounds).transpose(-1, -2).to(device)
 DESIGN_SPACE_DIM = len(design_space_bounds)
 
 # Create a target spectrum
-target = np.load("../pygdm/target_%s.npz"%TARGET_SHAPE)
+TARGETS_DIR = "/mmfs1/home/kiranvad/cheme-kiranvad/activephasemap-examples/pygdm"
+target = np.load(TARGETS_DIR+"/target_%s.npz"%TARGET_SHAPE)
 wav = target["x"]
 n_domain = len(wav)
 t = (wav-min(wav))/(max(wav)-min(wav))
