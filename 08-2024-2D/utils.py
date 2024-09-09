@@ -34,9 +34,9 @@ with open('/mmfs1/home/kiranvad/cheme-kiranvad/activephasemap-examples/pretraine
     best_np_config = json.load(f)
 N_LATENT = best_np_config["z_dim"]
 N_Z_DRAWS = 256
-mlp_model_args = {"num_epochs" : 2000, 
-                 "learning_rate" : 3e-3, 
-                 "verbose": 100,
+mlp_model_args = {"num_epochs" : 500, 
+                 "learning_rate" : 5e-3, 
+                 "verbose": 10,
                  }
 
 np_model_args = {"num_iterations": 500, 
@@ -52,6 +52,7 @@ def print_matrix(A):
     print(A.to_string())
 
 """ Helper functions """
+@torch.no_grad()
 def featurize_spectra(np_model, comps_all, spectra_all):
     """ Obtain latent space embedding from spectra.
     """
@@ -61,12 +62,11 @@ def featurize_spectra(np_model, comps_all, spectra_all):
         spectra[i] = torch.tensor(si).to(device)
     t = torch.linspace(0, 1, n_domain).repeat(num_samples, 1).to(device)
 
-    inds = torch.randint(0, n_domain, (int(0.8*n_domain),))
+    inds = torch.randint(0, n_domain, (int(0.95*n_domain),))
     x_context = t[:,inds].unsqueeze(-1) 
     y_context = spectra[:,inds].unsqueeze(-1)
-    with torch.no_grad():
-        mu_context, sigma_context = np_model.xy_to_mu_sigma(x_context, y_context)
-        q_context = torch.distributions.Normal(mu_context, sigma_context)
+    mu_context, sigma_context = np_model.xy_to_mu_sigma(x_context, y_context)
+    q_context = torch.distributions.Normal(mu_context, sigma_context)
         
     train_y = q_context.rsample(torch.Size([N_Z_DRAWS]))
     
@@ -133,6 +133,8 @@ def run_iteration(expt, config):
 def from_comp_to_spectrum(t, c, comp_model, np_model, return_mlp_outputs=False):
     ci = torch.tensor(c).to(device)
     z_mu, z_std = comp_model.mlp(ci)
+    z_mu = comp_model.mu_scaler.inverse_transform(z_mu)
+    z_std = comp_model.std_scaler.inverse_transform(z_std)
     z_dist = torch.distributions.Normal(z_mu, z_std)
     z = z_dist.sample(torch.Size([100]))
     t = torch.from_numpy(t).repeat(100, 1, 1).to(device)
@@ -155,11 +157,18 @@ def plot_model_accuracy(expt, config, result):
     This provides a qualitative understanding of current model 
     on training data.
     """
+
     print("Creating plots to visualize training data predictions...")
     iter_plot_dir = config["plot_dir"]+'preds_%d/'%config["iteration"]
     if os.path.exists(iter_plot_dir):
         shutil.rmtree(iter_plot_dir)
     os.makedirs(iter_plot_dir)
+
+    fig, ax = plt.subplots()
+    ax.plot(range(len(result["comp_train_loss"])), result["comp_train_loss"])
+    ax.plot(range(len(result["comp_eval_loss"])), result["comp_eval_loss"])
+    plt.savefig(iter_plot_dir+'mlp_loss.png')
+    plt.close() 
 
     num_samples, c_dim = expt.comps.shape
     for i in range(num_samples):
@@ -176,7 +185,7 @@ def plot_model_accuracy(expt, config, result):
         minus = (mu-sigma)
         plus = (mu+sigma)
         axs[0].fill_between(expt.wl, minus, plus, color='grey')
-        axs[0].scatter(expt.wl, expt.spectra_normalized[i,:], color='k')
+        axs[0].scatter(expt.wl, expt.spectra_normalized[i,:], color='k', s=10)
         axs[0].set_title("(MLP) time : %d conc : %.2f"%(expt.comps[i,1], expt.comps[i,0]))
         
         # Plot the Z values comparision between trained and MLP predictions
@@ -185,12 +194,12 @@ def plot_model_accuracy(expt, config, result):
             color = violin["bodies"][0].get_facecolor().flatten()
             labels.append((mpatches.Patch(color=color), label))
         mlp_pred = torch.distributions.Normal(z_mu, z_std).sample(torch.Size([100]))
-        add_label(axs[1].violinplot(mlp_pred.cpu().numpy(), showmeans=True), label="Pred")
+        add_label(axs[1].violinplot(mlp_pred.cpu().numpy(), showmeans=True), label="MLP")
 
         train_z_samples = torch.distributions.Normal(result["train_z_mean"][i,:], 
                                                      result["train_z_std"][i,:]
                                                     ).sample(torch.Size([100]))
-        add_label(axs[1].violinplot(train_z_samples.cpu().numpy(), showmeans=True), label="Train")
+        add_label(axs[1].violinplot(train_z_samples.cpu().numpy(), showmeans=True), label="NP")
         axs[1].legend(*zip(*labels))
 
         # Plot NP model prediction from trained Z values
@@ -202,13 +211,14 @@ def plot_model_accuracy(expt, config, result):
             y_pred_mu, y_pred_sigma = result["np_model"].xz_to_y(x_target, q_train.rsample())
             p_y_pred = torch.distributions.Normal(y_pred_mu, y_pred_sigma)
             mu = p_y_pred.loc.detach()
-            axs[2].plot(expt.wl, mu.squeeze().cpu().numpy(), alpha=0.05, c='b')
-        axs[2].scatter(expt.wl, expt.spectra_normalized[i,:], color='k')
+            axs[2].plot(expt.wl, mu.squeeze().cpu().numpy(), alpha=0.05, c='tab:orange')
+        axs[2].scatter(expt.wl, expt.spectra_normalized[i,:], color='k', s=10)
         axs[2].set_title("NP Model")
 
         plt.savefig(iter_plot_dir+'%d.png'%(i))
         plt.close()
 
+@torch.no_grad()
 def plot_iteration(expt, config, result):
     layout = [['A1','A2', 'C', 'C'], 
               ['B1', 'B2', 'C', 'C']
@@ -229,9 +239,8 @@ def plot_iteration(expt, config, result):
     axs['A1'].set_ylim([bounds[0,1], bounds[1,1]])
 
     # plot acqf
-    with torch.no_grad():
-        C_grid_ = torch.tensor(C_grid).to(device).reshape(len(C_grid),1,2)
-        acq_values = result["acqf"](C_grid_).squeeze().cpu().numpy()
+    C_grid_ = torch.tensor(C_grid).to(device).reshape(len(C_grid),1,2)
+    acq_values = result["acqf"](C_grid_).squeeze().cpu().numpy()
     cmap = colormaps["magma"]
     norm = Normalize(vmin=min(acq_values), vmax = max(acq_values))
     mappable = ScalarMappable(norm=norm, cmap=cmap)
@@ -244,26 +253,26 @@ def plot_iteration(expt, config, result):
     axs['A2'].set_xlabel('C1', fontsize=20)
     axs['A2'].set_ylabel('C2', fontsize=20) 
 
-    with torch.no_grad():
-        rids = np.random.choice(C_train.shape[0], 10)
-        random_train_comps = C_train[rids,:]
-        for ci in random_train_comps:
-            mu, _ = from_comp_to_spectrum(expt.t, ci, result["comp_model"], result["np_model"])
-            t_ = expt.t
-            axs['B2'].plot(t_, mu.cpu().squeeze(), color='grey')
-        axs['B2'].set_title('random sample p(y|c)')
-        axs['B2'].set_xlabel('t', fontsize=20)
-        axs['B2'].set_ylabel('f(t)', fontsize=20) 
+    
+    rids = np.random.choice(C_train.shape[0], 10)
+    random_train_comps = C_train[rids,:]
+    for ci in random_train_comps:
+        mu, _ = from_comp_to_spectrum(expt.t, ci, result["comp_model"], result["np_model"])
+        t_ = expt.t
+        axs['B2'].plot(t_, mu.cpu().squeeze(), color='grey')
+    axs['B2'].set_title('random sample p(y|c)')
+    axs['B2'].set_xlabel('t', fontsize=20)
+    axs['B2'].set_ylabel('f(t)', fontsize=20) 
 
-        z_samples = -5.0 + 10.0*torch.randn((20, N_LATENT)).to(device)
-        for z_sample in z_samples:
-            t = torch.from_numpy(t_)
-            t = t.view(1, t_.shape[0], 1).to(device)
-            mu, _ = result["np_model"].xz_to_y(t, z_sample)
-            axs['B1'].plot(t_, mu.cpu().squeeze(), color='grey')
-        axs['B1'].set_title('random sample p(y|z)')
-        axs['B1'].set_xlabel('t', fontsize=20)
-        axs['B1'].set_ylabel('f(t)', fontsize=20) 
+    z_samples = -5.0 + 10.0*torch.randn((20, N_LATENT)).to(device)
+    for z_sample in z_samples:
+        t = torch.from_numpy(t_)
+        t = t.view(1, t_.shape[0], 1).to(device)
+        mu, _ = result["np_model"].xz_to_y(t, z_sample)
+        axs['B1'].plot(t_, mu.cpu().squeeze(), color='grey')
+    axs['B1'].set_title('random sample p(y|z)')
+    axs['B1'].set_xlabel('t', fontsize=20)
+    axs['B1'].set_ylabel('f(t)', fontsize=20) 
 
     # plot the full evaluation on composition space
     ax = axs['C']
@@ -274,13 +283,13 @@ def plot_iteration(expt, config, result):
     ax.xaxis.set_major_formatter(lambda x, pos : scaled_tickformat(scaler_x, x, pos))
     ax.yaxis.set_major_formatter(lambda y, pos : scaled_tickformat(scaler_y, y, pos))
     C_grid = get_twod_grid(10, bounds)
-    with torch.no_grad():
-        for ci in C_grid:
-            mu, sigma = from_comp_to_spectrum(expt.t, ci, result["comp_model"], result["np_model"])
-            mu_ = mu.cpu().squeeze().numpy()
-            sigma_ = sigma.cpu().squeeze().numpy()
-            norm_ci = np.array([scaler_x.transform(ci[0]), scaler_y.transform(ci[1])])
-            _inset_spectra(norm_ci, expt.t, mu_, sigma_, ax, show_sigma=True)
+
+    for ci in C_grid:
+        mu, sigma = from_comp_to_spectrum(expt.t, ci, result["comp_model"], result["np_model"])
+        mu_ = mu.cpu().squeeze().numpy()
+        sigma_ = sigma.cpu().squeeze().numpy()
+        norm_ci = np.array([scaler_x.transform(ci[0]), scaler_y.transform(ci[1])])
+        _inset_spectra(norm_ci, expt.t, mu_, sigma_, ax, show_sigma=True)
     ax.set_xlabel('C1')
     ax.set_ylabel('C2')
 
