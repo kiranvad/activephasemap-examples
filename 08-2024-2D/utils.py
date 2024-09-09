@@ -26,6 +26,7 @@ from matplotlib.colors import Normalize
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 from matplotlib import colormaps 
 from matplotlib.cm import ScalarMappable
+import matplotlib.patches as mpatches
 
 PRETRAIN_LOC = "/mmfs1/home/kiranvad/cheme-kiranvad/activephasemap-examples/pretrained/UVVis/test_np_new_api/model.pt"
 
@@ -58,25 +59,20 @@ def featurize_spectra(np_model, comps_all, spectra_all):
     spectra = torch.zeros((num_samples, n_domain)).to(device)
     for i, si in enumerate(spectra_all):
         spectra[i] = torch.tensor(si).to(device)
-    t = torch.linspace(0, 1, n_domain)
-    t = t.repeat(num_samples, 1).to(device)
-    # with torch.no_grad():
-    #     z_mean, z_std = np_model.xy_to_mu_sigma(t.unsqueeze(2), spectra.unsqueeze(2)) 
+    t = torch.linspace(0, 1, n_domain).repeat(num_samples, 1).to(device)
 
-    num_context = randint(3, int((n_domain/2)-3))
-    num_extra_target = randint(int(n_domain/2), int(n_domain/2)+2)
-    train_y = []
-    for _ in range(N_Z_DRAWS):
-        with torch.no_grad():
-            x_context, y_context, _, _ = context_target_split(t.unsqueeze(2), 
-                                                              spectra.unsqueeze(2), 
-                                                              num_context, num_extra_target)
-            z, _ = np_model.xy_to_mu_sigma(x_context, y_context)
-            train_y.append(z)
+    inds = torch.randint(0, n_domain, (int(0.8*n_domain),))
+    x_context = t[:,inds].unsqueeze(-1) 
+    y_context = spectra[:,inds].unsqueeze(-1)
+    with torch.no_grad():
+        mu_context, sigma_context = np_model.xy_to_mu_sigma(x_context, y_context)
+        q_context = torch.distributions.Normal(mu_context, sigma_context)
+        
+    train_y = q_context.rsample(torch.Size([N_Z_DRAWS]))
     
-    z_mean = torch.stack(train_y).mean(dim=0)
-    z_std = torch.stack(train_y).std(dim=0)
-    train_x = torch.from_numpy(comps_all)
+    z_mean = train_y.mean(dim=0)
+    z_std = train_y.std(dim=0)
+    train_x = torch.from_numpy(comps_all).to(device)
 
     return train_x, z_mean, z_std
 
@@ -129,10 +125,12 @@ def run_iteration(expt, config):
     result["acqf"] = acqf
     result["comps_new"] = new_x.cpu().numpy()
     result["train_x"] = train_x
+    result["train_z_mean"] = train_z_mean 
+    result["train_z_std"] = train_z_std
 
     return result
 
-def from_comp_to_spectrum(t, c, comp_model, np_model):
+def from_comp_to_spectrum(t, c, comp_model, np_model, return_mlp_outputs=False):
     ci = torch.tensor(c).to(device)
     z_mu, z_std = comp_model.mlp(ci)
     z_dist = torch.distributions.Normal(z_mu, z_std)
@@ -145,9 +143,12 @@ def from_comp_to_spectrum(t, c, comp_model, np_model):
     sigma_pred = y_samples.std(dim=0, keepdim=True)
     mu_ = mean_pred.cpu().squeeze()
     sigma_ = sigma_pred.cpu().squeeze() 
+    if return_mlp_outputs:
+        return mu_, sigma_, z_mu, z_std 
+    else:
+        return mu_, sigma_   
 
-    return mu_, sigma_   
-
+@torch.no_grad()
 def plot_model_accuracy(expt, config, result):
     """ Plot accuracy of model predictions of experimental data
 
@@ -162,15 +163,49 @@ def plot_model_accuracy(expt, config, result):
 
     num_samples, c_dim = expt.comps.shape
     for i in range(num_samples):
-        fig, ax = plt.subplots()
-        with torch.no_grad():
-            mu, sigma = from_comp_to_spectrum(expt.t, expt.comps[i,:], result["comp_model"], result["np_model"])
-            ax.plot(expt.wl, mu)
-            minus = (mu-sigma)
-            plus = (mu+sigma)
-            ax.fill_between(expt.wl, minus, plus, color='grey')
-        ax.scatter(expt.wl, expt.F[i], color='k')
-        ax.set_title("time : %d conc : %.2f"%(expt.comps[i,1], expt.comps[i,0]))
+        fig, axs = plt.subplots(1,3, figsize=(3*4, 4))
+
+        # Plot MLP model predictions of the spectra
+        mu, sigma, z_mu, z_std = from_comp_to_spectrum(expt.t, 
+                                                        expt.comps[i,:], 
+                                                        result["comp_model"], 
+                                                        result["np_model"],
+                                                        return_mlp_outputs = True
+                                                        )
+        axs[0].plot(expt.wl, mu)
+        minus = (mu-sigma)
+        plus = (mu+sigma)
+        axs[0].fill_between(expt.wl, minus, plus, color='grey')
+        axs[0].scatter(expt.wl, expt.spectra_normalized[i,:], color='k')
+        axs[0].set_title("(MLP) time : %d conc : %.2f"%(expt.comps[i,1], expt.comps[i,0]))
+        
+        # Plot the Z values comparision between trained and MLP predictions
+        labels = []
+        def add_label(violin, label):
+            color = violin["bodies"][0].get_facecolor().flatten()
+            labels.append((mpatches.Patch(color=color), label))
+        mlp_pred = torch.distributions.Normal(z_mu, z_std).sample(torch.Size([100]))
+        add_label(axs[1].violinplot(mlp_pred.cpu().numpy(), showmeans=True), label="Pred")
+
+        train_z_samples = torch.distributions.Normal(result["train_z_mean"][i,:], 
+                                                     result["train_z_std"][i,:]
+                                                    ).sample(torch.Size([100]))
+        add_label(axs[1].violinplot(train_z_samples.cpu().numpy(), showmeans=True), label="Train")
+        axs[1].legend(*zip(*labels))
+
+        # Plot NP model prediction from trained Z values
+        q_train = torch.distributions.Normal(result["train_z_mean"][i,:], 
+                                             result["train_z_std"][i,:]
+                                            )
+        x_target = torch.from_numpy(expt.t).view(1,len(expt.t),1).to(device)
+        for j in range(200):
+            y_pred_mu, y_pred_sigma = result["np_model"].xz_to_y(x_target, q_train.rsample())
+            p_y_pred = torch.distributions.Normal(y_pred_mu, y_pred_sigma)
+            mu = p_y_pred.loc.detach()
+            axs[2].plot(expt.wl, mu.squeeze().cpu().numpy(), alpha=0.05, c='b')
+        axs[2].scatter(expt.wl, expt.spectra_normalized[i,:], color='k')
+        axs[2].set_title("NP Model")
+
         plt.savefig(iter_plot_dir+'%d.png'%(i))
         plt.close()
 
@@ -220,7 +255,7 @@ def plot_iteration(expt, config, result):
         axs['B2'].set_xlabel('t', fontsize=20)
         axs['B2'].set_ylabel('f(t)', fontsize=20) 
 
-        z_samples = torch.randn((20, N_LATENT)).to(device)
+        z_samples = -5.0 + 10.0*torch.randn((20, N_LATENT)).to(device)
         for z_sample in z_samples:
             t = torch.from_numpy(t_)
             t = t.view(1, t_.shape[0], 1).to(device)
