@@ -47,9 +47,6 @@ def from_comp_to_spectrum(t, c, comp_model, np_model):
     """
     ci = torch.tensor(c).to(device)
     z_mu, z_std = comp_model.mlp(ci)
-    print(comp_model)
-    z_mu = comp_model.mu_scaler.inverse_transform(z_mu)
-    z_std = comp_model.std_scaler.inverse_transform(z_std)
     z_dist = torch.distributions.Normal(z_mu, z_std)
     z = z_dist.sample(torch.Size([100]))
     t = torch.from_numpy(t).repeat(100, 1, 1).to(device)
@@ -94,7 +91,6 @@ def plot_mlp_grid(grid_comps):
         minus = (mu-sigma)
         plus = (mu+sigma)
         axs[0].fill_between(expt.wl, minus, plus, color='grey')
-        axs[0].scatter(expt.wl, expt.spectra_normalized[i,:], color='k', s=10)
         axs[0].set_title("(MLP) time : %d conc : %.2f"%(expt.comps[i,1], expt.comps[i,0]))
         
         # Plot the Z values trained MLP predictions
@@ -102,7 +98,11 @@ def plot_mlp_grid(grid_comps):
         axs[1].violinplot(mlp_pred.cpu().numpy(), showmeans=True)
 
         # Plot the location of the current prediction wrto train data
-        axs[2].scatter(train_x[:,0], train_x[:,1], color="grey", facecolor="none")
+        axs[2].scatter(train_x[:,0].cpu().numpy(), 
+                       train_x[:,1].cpu().numpy(), 
+                       color="grey", 
+                       facecolor="none"
+                       )
         axs[2].scatter(grid_comps[i,0], grid_comps[i,1], color="tab:red", s=50)
 
         plt.savefig(iter_plot_dir+'%d.png'%(i))

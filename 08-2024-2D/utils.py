@@ -34,13 +34,13 @@ with open('/mmfs1/home/kiranvad/cheme-kiranvad/activephasemap-examples/pretraine
     best_np_config = json.load(f)
 N_LATENT = best_np_config["z_dim"]
 N_Z_DRAWS = 256
-mlp_model_args = {"num_epochs" : 500, 
-                 "learning_rate" : 5e-3, 
-                 "verbose": 10,
+mlp_model_args = {"num_epochs" : 1000, 
+                 "learning_rate" : 1e-3, 
+                 "verbose": 100,
                  }
 
-np_model_args = {"num_iterations": 500, 
-                 "verbose":100, 
+np_model_args = {"num_iterations": 1000, 
+                 "verbose":250, 
                  "lr":best_np_config["lr"], 
                  "batch_size": best_np_config["batch_size"]
                  }
@@ -133,8 +133,6 @@ def run_iteration(expt, config):
 def from_comp_to_spectrum(t, c, comp_model, np_model, return_mlp_outputs=False):
     ci = torch.tensor(c).to(device)
     z_mu, z_std = comp_model.mlp(ci)
-    z_mu = comp_model.mu_scaler.inverse_transform(z_mu)
-    z_std = comp_model.std_scaler.inverse_transform(z_std)
     z_dist = torch.distributions.Normal(z_mu, z_std)
     z = z_dist.sample(torch.Size([100]))
     t = torch.from_numpy(t).repeat(100, 1, 1).to(device)

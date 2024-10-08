@@ -13,10 +13,10 @@ PRETRAIN_LOC = "/mmfs1/home/kiranvad/cheme-kiranvad/activephasemap-examples/pret
 with open('/mmfs1/home/kiranvad/cheme-kiranvad/activephasemap-examples/pretrained/UVVis/best_config.json') as f:
     best_np_config = json.load(f)
 N_LATENT = best_np_config["z_dim"]
-np_model_args = {"num_iterations": 100, 
-                 "verbose":100, 
+np_model_args = {"num_iterations": 1000, 
+                 "verbose":250, 
                  "lr":best_np_config["lr"], 
-                 "batch_size": best_np_config["batch_size"]
+                 "batch_size": 4
                  }
 
 EXPT_DATA_DIR = "../data/" 
@@ -36,9 +36,10 @@ x_target = torch.linspace(0, 1, n_domain).reshape(1,n_domain,1).to(device)
 np_model = NeuralProcess(best_np_config["r_dim"], N_LATENT, best_np_config["h_dim"]).to(device)
 np_model.load_state_dict(torch.load(PRETRAIN_LOC, map_location=device, weights_only=True))
 
-def plot_samples(model, x_target, num_samples=100):
+def plot_samples(model, x_target, num_samples=100, z_range = [-3,3]):
     fig, ax = plt.subplots()
-    z_samples = -5.0 + 10.0*torch.randn((20, N_LATENT)).to(device)
+    z_samples = torch.randn((num_samples, N_LATENT)).to(device)
+    z_samples = z_range[0] + (z_range[1]-z_range[0])*z_samples
     with torch.no_grad():
         for zi in z_samples:
             mu, _ = model.xz_to_y(x_target, zi.to(device))
