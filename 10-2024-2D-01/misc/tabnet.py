@@ -3,20 +3,15 @@ import torch
 from pytorch_tabnet.tab_model import TabNetRegressor
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import root_mean_squared_error
+import pdb 
 
 # Step 1: Generate synthetic data
 np.random.seed(42)
-X = np.random.randn(1000, 10)
-y = np.sum(X, axis=1) + np.random.randn(1000) * 0.1
+X = np.random.randn(100, 10)
+y = np.random.randn(100,2) * 0.1
 
 # Step 2: Split data into training and validation sets
-X_train, X_val, y_train, y_val = train_test_split(X, y.reshape(-1, 1), test_size=0.2, random_state=42)
-
-# Convert data to PyTorch tensors
-X_train_tensor = torch.tensor(X_train, dtype=torch.float32)
-y_train_tensor = torch.tensor(y_train, dtype=torch.float32)
-X_val_tensor = torch.tensor(X_val, dtype=torch.float32)
-y_val_tensor = torch.tensor(y_val, dtype=torch.float32)
+X_train, X_val, y_train, y_val = train_test_split(X, y, test_size=0.2, random_state=42)
 
 # Step 3: Initialize the TabNet Regressor
 model = TabNetRegressor(
