@@ -6,10 +6,10 @@ import torch
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 torch.set_default_dtype(torch.double)
 
-from activephasemap.utils.simulators import UVVisExperiment
-from activephasemap.utils.settings import initialize_points
-sys.path.append("/mmfs1/home/kiranvad/cheme-kiranvad/activephasemap-examples/08-2024-2D/")
-from utils import *
+from activephasemap.simulators import UVVisExperiment
+from activephasemap.utils import *
+# sys.path.append("/mmfs1/home/kiranvad/cheme-kiranvad/activephasemap-examples/08-2024-2D/")
+# from utils import *
 
 parser = argparse.ArgumentParser(
                     prog='Train emulator of gold nanoparticle synthesis',

@@ -15,9 +15,8 @@ print("Importing torch took : ", end-start)
 from activephasemap.models.np import NeuralProcess, context_target_split
 from activephasemap.models.utils import finetune_neural_process
 from activephasemap.models.mlp import MLP
-from activephasemap.utils.acquisition import CompositeModelUncertainity
-from activephasemap.utils.simulators import UVVisExperiment
-from activephasemap.utils.visuals import MinMaxScaler, _inset_spectra, scaled_tickformat, get_twod_grid
+from activephasemap.acquisition import CompositeModelUncertainity
+from activephasemap.simulators import UVVisExperiment
 
 RNG = np.random.default_rng()
 
@@ -44,6 +43,41 @@ np_model_args = {"num_iterations": 1000,
                  "lr":best_np_config["lr"], 
                  "batch_size": best_np_config["batch_size"]
                  }
+
+def get_twod_grid(n_grid, bounds):
+    x = np.linspace(bounds[0,0],bounds[1,0], n_grid)
+    y = np.linspace(bounds[0,1],bounds[1,1], n_grid)
+    X,Y = np.meshgrid(x,y)
+    points = np.vstack([X.ravel(), Y.ravel()]).T 
+
+    return points 
+
+def _inset_spectra(c, t, mu, sigma, ax, show_sigma=False, **kwargs):
+        loc_ax = ax.transLimits.transform(c)
+        ins_ax = ax.inset_axes([loc_ax[0],loc_ax[1],0.1,0.1])
+        ins_ax.plot(t, mu, **kwargs)
+        if show_sigma:
+            ins_ax.fill_between(t,mu-sigma, mu+sigma,
+            color='grey')
+        ins_ax.axis('off')
+        ins_ax.set_ylim([0,1.8])
+        
+        return 
+
+class MinMaxScaler:
+    def __init__(self, min, max):
+        self.min = min 
+        self.max = max 
+        self.range = max-min
+
+    def transform(self, x):
+        return (x-self.min)/self.range
+    
+    def inverse(self, xt):
+        return (self.range*xt)+self.min
+
+def scaled_tickformat(scaler, x, pos):
+    return '%.1f'%scaler.inverse(x)
 
 @torch.no_grad
 def print_matrix(A):

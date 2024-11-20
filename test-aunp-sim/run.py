@@ -6,11 +6,9 @@ import torch
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 torch.set_default_dtype(torch.double)
 
-from activephasemap.utils.simulators import UVVisExperiment
-from activephasemap.utils.simulators import GNPPhases
-from activephasemap.utils.settings import initialize_points
-sys.path.append("/mmfs1/home/kiranvad/cheme-kiranvad/activephasemap-examples/08-2024-2D/")
-from utils import *
+from activephasemap.simulators import UVVisExperiment
+from activephasemap.simulators import GNPPhases
+from activephasemap.utils import *
 
 parser = argparse.ArgumentParser(
                     prog='Train emulator of gold nanoparticle synthesis',
@@ -53,7 +51,7 @@ config = {"iteration" : ITERATION,
 
 def generate_spectra(sim, comps):
     "This functions mimics the UV-Vis characterization module run"
-    print("Generating spectra for iteration %d"%ITERATION, '\n', comps)
+    print("Generating spectra for iteration %d"%ITERATION, '\n')
     spectra = np.zeros((len(comps), sim.n_domain))
     for j, cj in enumerate(comps):
         spectra[j,:] = sim.simulate(cj)
