@@ -102,9 +102,11 @@ def run_iteration(expt, config):
     result["np_loss"] = np_loss
 
     train_x, train_z_mean, train_z_std = featurize_spectra(np_model, comps_all, spectra_all)
+    
     comp_model = MLP(train_x, train_z_mean, train_z_std, **mlp_model_args)
     print("Training comosition model p(z|C): ")
     comp_train_loss, comp_eval_loss = comp_model.fit(use_early_stoping=True)
+
     np.save(config["save_dir"]+'comp_train_loss_%d.npy'%config["iteration"], comp_train_loss)
     np.save(config["save_dir"]+'comp_eval_loss_%d.npy'%config["iteration"], comp_eval_loss)
     torch.save(comp_model.state_dict(), config["save_dir"]+'comp_model_%d.pt'%config["iteration"])

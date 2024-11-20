@@ -13,16 +13,19 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 from pytorch_tabnet.tab_model import TabNetRegressor
+from torchensemble.gradient_boosting import GradientBoostingRegressor 
+from torchensemble.utils.logging import set_logger
 
-ITERATION = 4
+ITERATION = 5
+EXPT_DIR = "/mmfs1/home/kiranvad/cheme-kiranvad/activephasemap-examples/test-aunp-sim"
+train_x = torch.load(EXPT_DIR+"/output/train_x_%d.pt"%ITERATION, weights_only=True)
+train_z_mean = torch.load(EXPT_DIR+"/output/train_z_mean_%d.pt"%ITERATION, weights_only=True)
+train_z_std = torch.load(EXPT_DIR+"/output/train_z_std_%d.pt"%ITERATION, weights_only=True)
 
-train_x = torch.load("../output/train_x_%d.pt"%ITERATION, weights_only=True)
-train_z_mean = torch.load("../output/train_z_mean_%d.pt"%ITERATION, weights_only=True)
-train_z_std = torch.load("../output/train_z_std_%d.pt"%ITERATION, weights_only=True)
-
-X_xgb = train_x.double().cpu().numpy()
-y_xgb = torch.cat((train_z_mean, train_z_std), dim=1).double().cpu().numpy()
-X_train, X_test, y_train, y_test = train_test_split(X_xgb, y_xgb, test_size=0.2, random_state=42)
+X_xgb = train_x
+y_xgb = torch.cat((train_z_mean, train_z_std), dim=1)
+X_train, X_test, y_train, y_test = train_test_split(X_xgb.double().cpu().numpy(), 
+                                                    y_xgb.double().cpu().numpy(), test_size=0.2, random_state=42)
 
 # Specify the Neural Process model
 with open('/mmfs1/home/kiranvad/cheme-kiranvad/activephasemap-examples/pretrained/UVVis/best_config.json') as f:
@@ -31,15 +34,14 @@ np_model = NeuralProcess(best_np_config["r_dim"],
                          best_np_config["z_dim"], 
                          best_np_config["h_dim"]
                          ).to(device)
-np_model.load_state_dict(torch.load("../output/np_model_%d.pt"%ITERATION, 
+np_model.load_state_dict(torch.load(EXPT_DIR+"/output/np_model_%d.pt"%ITERATION, 
                                     map_location=device, 
                                     weights_only=True
                                     )
                         )
 
 design_space_bounds = [(0.0, 87.0), (0.0,11.0)]
-EXPT_DATA_DIR = "../data/"
-expt = UVVisExperiment(design_space_bounds, EXPT_DATA_DIR)
+expt = UVVisExperiment(design_space_bounds, EXPT_DIR+"/data/")
 expt.read_iter_data(ITERATION)
 expt.generate(use_spline=True)
 
@@ -57,12 +59,16 @@ def from_latents_to_spectrum(z_mu, z_std):
 
     return mu_.detach().numpy(), sigma_.detach().numpy()
 
-def plot_predictions(mlp_model, xgb_model, tabnet_model):
+def plot_predictions(mlp_model, xgb_model, tabnet_model, ensemble_model):
     pred_xgb = torch.from_numpy(xgb_model.predict(train_x.numpy())).to(device)
     z_mu_xgb, z_std_xgb = pred_xgb[:,:4], pred_xgb[:, 4:]
 
     z_mu_mlp, z_std_mlp = mlp_model.mlp(train_x.double().to(device))
 
+    pred_ensemble = ensemble_model.predict(train_x.double().to(device)).to(device)
+    z_mu_ensemble, z_std_ensemble = pred_ensemble[:,:4], pred_ensemble[:, 4:]
+
+    torch.set_default_dtype(torch.float)
     pred_tabnet = torch.from_numpy(tabnet_model.predict(X_xgb)).to(device)
     z_mu_tabnet, z_std_tabnet = pred_tabnet[:,:4], torch.abs(pred_tabnet[:, 4:])
 
@@ -96,6 +102,12 @@ def plot_predictions(mlp_model, xgb_model, tabnet_model):
         axs[1].plot(expt.wl, mu, label="tabnet")
         axs[1].fill_between(expt.wl, mu-sigma, mu+sigma, color='grey')
 
+        ensemble_pred = torch.distributions.Normal(z_mu_ensemble[i,:], z_std_ensemble[i,:]).sample(torch.Size([100]))
+        add_label(axs[0].violinplot(ensemble_pred.cpu().numpy(), showmeans=True), label="tabnet")
+        mu, sigma = from_latents_to_spectrum(z_mu_ensemble[i,:], z_std_ensemble[i,:])
+        axs[1].plot(expt.wl, mu, label="ensemble")
+        axs[1].fill_between(expt.wl, mu-sigma, mu+sigma, color='grey')
+
         train_z_samples = torch.distributions.Normal(train_z_mean[i,:],train_z_std[i,:]).sample(torch.Size([100]))
         add_label(axs[0].violinplot(train_z_samples.cpu().numpy(), showmeans=True), label="Train")
         axs[0].legend(*zip(*labels))
@@ -114,7 +126,6 @@ comp_train_loss, comp_eval_loss = mlp_model.fit(use_early_stoping=True)
 # 2. XGBoost 
 
 xgb_model = xgb.XGBRegressor(tree_method="hist",
-                             device="cuda",
                              objective='reg:squarederror',
                              eval_metric='rmse'
                              )
@@ -124,31 +135,27 @@ search = GridSearchCV(
     "n_estimators": [50, 100, 200]
     },
     scoring='neg_mean_squared_error',
-    verbose=10,
+    verbose=False,
 )
 evalset = [(X_train, y_train), (X_test, y_test)]
-search.fit(X_xgb, y_xgb, eval_set=evalset)
+search.fit(X_xgb, y_xgb)
 
 best_model = search.best_estimator_
 print(f"Best Hyperparameters: {search.best_params_}")
 
 y_pred = best_model.predict(X_test)
 rmse = root_mean_squared_error(y_test, y_pred)
-print(f"Validation RMSE: {rmse:.4f}")
+print(f"(XGBoost) Validation RMSE: {rmse:.4f}")
 
 # 3.TabNet regression
 torch.set_default_dtype(torch.float)
-tabnet_model = TabNetRegressor(
-    n_d=8, n_a=8,  # Dimension of decision and attention steps
-    n_steps=3,
-    gamma=1.3,
-    n_independent=2,
-    n_shared=2,
-    lambda_sparse=0.001,
-    optimizer_fn=torch.optim.Adam,
-    optimizer_params=dict(lr=1e-3),
-    mask_type='sparsemax'
-)
+tabnet_model = TabNetRegressor(n_d=64, 
+                               n_a=64, 
+                               n_steps=10,
+                               n_independent = 3,
+                               n_shared = 3,
+                               verbose=0
+                               )
 
 tabnet_model.fit(
     X_train, 
@@ -157,14 +164,60 @@ tabnet_model.fit(
     eval_metric=['rmse'],
     max_epochs=1000,
     patience=100,
-    batch_size=32,
-    virtual_batch_size=16,
+    batch_size=16,
+    virtual_batch_size=8,
     num_workers=0,
     drop_last=False
 )
 
 y_pred = tabnet_model.predict(X_test)
 rmse = root_mean_squared_error(y_test, y_pred)
-print(f"Validation RMSE: {rmse:.4f}")
+print(f"(TabNet) Validation RMSE: {rmse:.4f}")
 
-plot_predictions(mlp_model, best_model, tabnet_model)
+# 4. Ensemble PyTorch
+torch.set_default_dtype(torch.double)
+# logger = set_logger('pytorch_ensemble')
+
+class MLPModel(torch.nn.Module):
+    def __init__(self, x_dim, z_dim):
+        super().__init__()
+        self.layer1 = torch.nn.Linear(x_dim, 32)
+        self.layer2 = torch.nn.Linear(32, 32)
+        self.layer3 = torch.nn.Linear(32, 16)
+  
+        self.hidden_to_mu = torch.nn.Linear(16, z_dim)
+        self.hidden_to_std = torch.nn.Linear(16, z_dim)
+
+    def forward(self, x):
+        h = torch.nn.functional.relu(self.layer1(x))
+        h = torch.nn.functional.relu(self.layer2(h))
+        h = torch.nn.functional.relu(self.layer3(h))
+        mu = self.hidden_to_mu(h)
+        std = torch.nn.functional.softplus(self.hidden_to_std(h))
+        
+        return torch.cat((mu, std), dim=1)
+
+MLP = MLPModel(train_x.shape[-1], best_np_config["z_dim"])
+ensemble_model = GradientBoostingRegressor(
+    estimator=MLP,
+    n_estimators=50,
+    cuda=True,
+)
+
+criterion = torch.nn.MSELoss(reduction="mean")
+ensemble_model.set_criterion(criterion)
+
+ensemble_model.set_optimizer('Adam', lr=1e-3, weight_decay=5e-4) 
+train_dataset = torch.utils.data.TensorDataset(torch.from_numpy(X_train).to(device), 
+                                               torch.from_numpy(y_train).to(device)
+                                               )
+train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=32, shuffle=True)
+
+
+ensemble_model.fit(train_loader=train_loader,  epochs=100)
+
+y_pred = ensemble_model.predict(torch.from_numpy(X_test).to(device)).numpy()
+rmse = root_mean_squared_error(y_test, y_pred)
+print(f"(Ensemble) Validation RMSE: {rmse:.4f}")
+ 
+plot_predictions(mlp_model, best_model, tabnet_model, ensemble_model)
