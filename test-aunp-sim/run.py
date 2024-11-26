@@ -19,8 +19,8 @@ args = parser.parse_args()
 ITERATION = args.iteration # specify the current itereation number
 
 # hyper-parameters
-BATCH_SIZE = 12
-N_INIT_POINTS = 24
+BATCH_SIZE = 5
+N_INIT_POINTS = 5
 DESIGN_SPACE_DIM = 2
 
 EXPT_DATA_DIR = "./data/"
