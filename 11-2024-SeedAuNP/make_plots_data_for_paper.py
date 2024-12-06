@@ -3,7 +3,7 @@ import numpy as np
 import matplotlib.pyplot as plt 
 import matplotlib.ticker as ticker
 import pandas as pd 
-import os, sys, time, shutil, pdb, argparse, json, glob
+import pdb, argparse, json, glob, pickle
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 torch.set_default_dtype(torch.double)
@@ -57,24 +57,24 @@ def sample_grid(n_grid_spacing):
 
     return grid_comps, grid_spectra
 
-grid_comps, grid_spectra = sample_grid(10)
-np.savez("./paper/grid_data_10_%d.npz"%ITERATION, comps=grid_comps, spectra=grid_spectra)
+# grid_comps, grid_spectra = sample_grid(10)
+# np.savez("./paper/grid_data_10_%d.npz"%ITERATION, comps=grid_comps, spectra=grid_spectra)
 
-if ITERATION==TOTAL_ITERATIONS:
-    grid_comps, grid_spectra = sample_grid(20)
-    np.savez("./paper/grid_data_20.npz", comps=grid_comps, spectra=grid_spectra)
+# if ITERATION==TOTAL_ITERATIONS:
+#     grid_comps, grid_spectra = sample_grid(20)
+#     np.savez("./paper/grid_data_20.npz", comps=grid_comps, spectra=grid_spectra)
 
-    grid_comps, grid_spectra = sample_grid(30)
-    np.savez("./paper/grid_data_30.npz", comps=grid_comps, spectra=grid_spectra)
+#     grid_comps, grid_spectra = sample_grid(30)
+#     np.savez("./paper/grid_data_30.npz", comps=grid_comps, spectra=grid_spectra)
 
-""" 2. Create acqusition function data """
+# """ 2. Create acqusition function data """
 
-acqf = XGBUncertainity(expt, expt.bounds, np_model, comp_model)
-C_grid = get_twod_grid(30, bounds_np)
-with torch.no_grad():
-    acq_values = acqf(torch.tensor(C_grid).reshape(len(C_grid),1,2)).squeeze().cpu().numpy()
+# acqf = XGBUncertainity(expt, expt.bounds, np_model, comp_model)
+# C_grid = get_twod_grid(30, bounds_np)
+# with torch.no_grad():
+#     acq_values = acqf(torch.tensor(C_grid).reshape(len(C_grid),1,2)).squeeze().cpu().numpy()
 
-np.savez("./paper/acqf_data_%d.npz"%ITERATION, comps=C_grid, values=acq_values)
+# np.savez("./paper/acqf_data_%d.npz"%ITERATION, comps=C_grid, values=acq_values)
 
 """ 3. Create data for train and test errors """
 
@@ -93,6 +93,7 @@ def load_models_from_iteration(i):
 
     return expt, comp_model, np_model
 
+@torch.no_grad()
 def get_accuracy(comps, domain, spectra, comp_model, np_model):
     mu, sigma = [], []
     for i in range(comps.shape[0]):
@@ -103,15 +104,15 @@ def get_accuracy(comps, domain, spectra, comp_model, np_model):
     mu = torch.stack(mu)
     sigma = torch.stack(sigma)
     target = torch.from_numpy(spectra)
-    loss = torch.abs((target-mu)/(sigma+1e-8)).mean()
-    
-    return loss.item()
+    loss = torch.abs((target-mu)/(sigma+1e-8)).mean(dim=1)
+    pdb.set_trace()
+    return loss.detach().cpu().squeeze().numpy()
 
 def get_accuracies_iteration():
-    accuracies = np.zeros((TOTAL_ITERATIONS, 2))
+    accuracies = {}
     for i in range(1,TOTAL_ITERATIONS+1):
         expt, comp_model, np_model = load_models_from_iteration(i)
-        train_mean_accuracy = get_accuracy(expt.comps.astype(np.double), 
+        train_accuracy = get_accuracy(expt.comps.astype(np.double), 
                                         expt.t, 
                                         expt.spectra_normalized, 
                                         comp_model, 
@@ -123,20 +124,22 @@ def get_accuracies_iteration():
             wav = np.load("./data/wav.npy")
             next_time = (wav-min(wav))/(max(wav)-min(wav))
 
-            test_mean_accuracy =  get_accuracy(next_comps, 
-                                            next_time, 
-                                            next_spectra, 
-                                            comp_model, 
-                                            np_model
-                                            )
-            accuracies[i-1, :] = np.asarray([train_mean_accuracy, test_mean_accuracy])
+            test_accuracy =  get_accuracy(next_comps, 
+                                          next_time, 
+                                          next_spectra, 
+                                          comp_model, 
+                                          np_model
+                                          )
+            print("Iteration %d : Train error : %2.4f \t Test error : %2.4f"%(i, train_accuracy.mean(), test_accuracy.mean()))
         else:
-            test_mean_accuracy = np.nan
-            accuracies[i-1, :] = np.asarray([train_mean_accuracy, np.nan])
-        
-        print("Iteration %d : Train error : %2.4f \t Test error : %2.4f"%(i, train_mean_accuracy, test_mean_accuracy))
+            test_accuracy = np.nan
+            print("Iteration %d : Train error : %2.4f"%(i, train_accuracy.mean()))
 
-    np.save("./paper/accuracies.npy", accuracies)
+        accuracies[i] = {"train": train_accuracy, "test": test_accuracy}
+        
+
+    with open("./paper/accuracies.pkl", 'wb') as handle:
+        pickle.dump(accuracies, handle, protocol=pickle.HIGHEST_PROTOCOL)
 
     return 
 
