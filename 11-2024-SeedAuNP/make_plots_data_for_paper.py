@@ -44,16 +44,37 @@ expt.generate(use_spline=True)
 bounds_np = expt.bounds.cpu().numpy()
 
 """ 1. Create grid data """
+
+def get_spectra(t, c, comp_model, np_model, nz=20):
+    """Batch function to compute spectra.
+
+    C shape : (n_samples, dimensions)
+    """
+    # predict z value from the comp model
+    nr, dx = c.shape
+    ct = torch.from_numpy(c).to(device).view(nr, 1, dx)
+    z_mu, z_std = comp_model.predict(ct)   
+    nr, nb, dz = z_mu.shape
+
+    # sample z values from the dist
+    z_dist = torch.distributions.Normal(z_mu, z_std)
+    z = z_dist.rsample(torch.Size([nz])).view(nz*nr*nb, dz)
+
+    time = torch.from_numpy(t).repeat(nz*nr*nb, 1, 1).to(device)
+    time = torch.swapaxes(time, 1, 2)
+
+    # sample spectra from NP model conditioned on z
+    y_samples, _ = np_model.xz_to_y(time, z)
+
+    return y_samples.view(nz, nr, nb, len(t)) 
+
+@torch.no_grad()
 def sample_grid(n_grid_spacing):
     grid_comps = get_twod_grid(n_grid_spacing, bounds_np)
+    grid_spectra_samples = get_spectra(expt.t, grid_comps, comp_model, np_model)
     grid_spectra = np.zeros((grid_comps.shape[0], len(expt.t), 2))
-    with torch.no_grad():
-        for i, ci in enumerate(grid_comps):
-            mu, sigma = from_comp_to_spectrum(expt.t, ci, comp_model, np_model)
-            mu_ = mu.cpu().squeeze().numpy()
-            sigma_ = sigma.cpu().squeeze().numpy()
-            grid_spectra[i, :, 0] = mu_ 
-            grid_spectra[i, :, 1] = sigma_
+    grid_spectra[...,0] = grid_spectra_samples.mean(dim=0).squeeze().cpu().numpy()
+    grid_spectra[...,0] = grid_spectra_samples.std(dim=0).squeeze().cpu().numpy()
 
     return grid_comps, grid_spectra
 
@@ -93,39 +114,58 @@ def load_models_from_iteration(i):
 
     return expt, comp_model, np_model
 
+def minmax_normalize(tensor, dim=None):
+    """
+    Min-max normalize a tensor along a specified dimension or globally.
+    
+    :param tensor: Input tensor of shape (nz, nr, nb, not).
+    :param dim: Dimension to normalize along. If None, normalize globally across all elements.
+    :return: Min-max normalized tensor with the same shape.
+    """
+    if dim is None:
+        # Global normalization across all elements
+        min_val = tensor.min()
+        max_val = tensor.max()
+    else:
+        # Normalize along the specified dimension
+        min_val, _ = tensor.min(dim=dim, keepdim=True)
+        max_val, _ = tensor.max(dim=dim, keepdim=True)
+    
+    # Prevent division by zero in case of constant values
+    range_val = max_val - min_val
+    range_val[range_val == 0] = 1.0
+    
+    return (tensor - min_val) / range_val
+
 @torch.no_grad()
-def get_accuracy(comps, domain, spectra, comp_model, np_model):
-    mu, sigma = [], []
-    for i in range(comps.shape[0]):
-        mu_i,sigma_i = from_comp_to_spectrum(domain, comps[i,:], comp_model, np_model)
-        mu.append(mu_i)
-        sigma.append(sigma_i)
+def get_accuracy(t, comps, spectra, comp_model, np_model):
+    y_samples = get_spectra(t, comps, comp_model, np_model)
+    y_samples_normed = minmax_normalize(y_samples, dim=-1)
+    mu = y_samples_normed.mean(dim=0).squeeze()
+    target = minmax_normalize(torch.from_numpy(spectra).to(device), dim=-1)
     
-    mu = torch.stack(mu)
-    sigma = torch.stack(sigma)
-    target = torch.from_numpy(spectra)
-    loss = torch.abs((target-mu)/(sigma+1e-8)).mean(dim=1)
+    loss = torch.nn.functional.mse_loss(target, mu, reduction='none').mean(dim=1)
     
-    return loss.detach().cpu().squeeze().numpy()
+    return loss.cpu().squeeze().numpy()
+
 
 def get_accuraciy_plot_data():
     accuracies = {}
     for i in range(1,TOTAL_ITERATIONS+1):
         expt, comp_model, np_model = load_models_from_iteration(i)
-        train_accuracy = get_accuracy(expt.comps.astype(np.double), 
-                                        expt.t, 
-                                        expt.spectra_normalized, 
-                                        comp_model, 
-                                        np_model
-                                        )
+        train_accuracy = get_accuracy(expt.t, 
+                                      expt.comps.astype(np.double), 
+                                      expt.spectra_normalized, 
+                                      comp_model, 
+                                      np_model
+                                      )
         if not i==TOTAL_ITERATIONS:
             next_comps = np.load("./data/comps_%d.npy"%(i)).astype(np.double)
             next_spectra = np.load("./data/spectra_%d.npy"%(i))
             wav = np.load("./data/wav.npy")
             next_time = (wav-min(wav))/(max(wav)-min(wav))
-
-            test_accuracy =  get_accuracy(next_comps, 
-                                          next_time, 
+            test_accuracy =  get_accuracy(next_time,
+                                          next_comps, 
                                           next_spectra, 
                                           comp_model, 
                                           np_model
