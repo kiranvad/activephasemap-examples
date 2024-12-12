@@ -13,12 +13,12 @@ from activephasemap.simulators import UVVisExperiment
 from activephasemap.models.xgb import XGBoost
 from activephasemap.utils import *
 
-TRAINING_ITERATIONS = 200 # total iterations for each optimization
-NUM_RESTARTS = 3 # number of optimization from random restarts
-LEARNING_RATE = 100
-TARGET_SHAPE_ID = 0 # chose from [0 - "sphere", 1 - "nanorod"]
+TRAINING_ITERATIONS = 1000 # total iterations for each optimization
+NUM_RESTARTS = 8 # number of optimization from random restarts
+LEARNING_RATE = 1e-1
+TARGET_SHAPE_ID = 1 # chose from [0 - "sphere", 1 - "nanorod"]
 
-TARGET_SHAPES = ["sphere", "triangle"]
+TARGET_SHAPES = ["sphere", "nanorod"]
 SAVE_DIR = "./retrosynthesis/%s/"%TARGET_SHAPES[TARGET_SHAPE_ID]
 if os.path.exists(SAVE_DIR):
     shutil.rmtree(SAVE_DIR)
@@ -33,8 +33,7 @@ N_LATENT = best_np_config["z_dim"]
 # Load trained NP model for p(y|z)
 np_model = NeuralProcess(best_np_config["r_dim"], N_LATENT, best_np_config["h_dim"]).to(device)
 np_model.load_state_dict(torch.load(DATA_DIR+'np_model_%d.pt'%(ITERATION), map_location=device, weights_only=True))
-for name, param in np_model.named_parameters():
-    param.requires_grad = True
+np_model.train(False)
 
 # Load trained composition to latent model for p(z|c)
 comp_model = XGBoost(xgb_model_args)
@@ -49,7 +48,7 @@ TARGETS_DIR = "/mmfs1/home/kiranvad/cheme-kiranvad/activephasemap-examples/11-20
 if TARGET_SHAPE_ID==0:
     target = np.load(TARGETS_DIR+"target_sphere.npz")
 else:
-    target = np.load(TARGETS_DIR+"triangle_nanorod.npz")
+    target = np.load(TARGETS_DIR+"target_nanorod.npz")
 wav = target["x"]
 n_domain = len(wav)
 t = (wav-min(wav))/(max(wav)-min(wav))
@@ -75,10 +74,7 @@ class Simulator(torch.nn.Module):
         """
         x - should be of shape (n, m, dx)
         """
-        # z_mu, z_std = self.c_to_z.predict(x)
-        nr, nb, dx = x.shape 
-        z_mu = torch.tensor(torch.randn(nr, nb, N_LATENT), dtype=x.dtype, device=x.device)
-        z_std = torch.tensor(torch.abs(torch.randn(nr, nb, N_LATENT)), dtype=x.dtype, device=x.device)
+        z_mu, z_std = self.c_to_z.predict(x)
         nr, nb, dz = z_mu.shape
         z_dist = torch.distributions.Normal(z_mu, z_std)
         z = z_dist.rsample(torch.Size([self.nz])).view(self.nz*nr*nb, dz)
@@ -97,7 +93,7 @@ def mse_loss(y_pred):
     target_ = min_max_normalize(target)
     mu_ = min_max_normalize(y_pred)
 
-    loss = torch.nn.functional.mse_loss(mu_, target_, reduction="none").mean(dim=1)
+    loss = ((target_-mu_)**2).sum(dim=1)
 
     return loss    
 
@@ -131,8 +127,15 @@ for i in range(TRAINING_ITERATIONS):
     X_traj.append(X.clone().detach())
     loss_traj.append(losses.clone().detach())
     spectra_traj.append(spectra.clone().detach())
-    if (i + 1) % 10 == 0:
-        print(f"Iteration {i+1:>3}/{TRAINING_ITERATIONS:>3} - Loss: {loss.item():>4.3f}")
+    if (i + 1) % 100 == 0:
+        print(f"Iteration {i+1:>3}/{TRAINING_ITERATIONS:>3} - Loss: {loss.item():>4.3f}; dX: {X.grad.mean()}")
+
+# Compute loss function on a grid for plotting
+with torch.no_grad():
+    grid_comps = get_twod_grid(15, bounds=bounds.cpu().numpy())
+    grid_spectra = sim(torch.from_numpy(grid_comps).view(225, 1, 2).to(device))
+    grid_loss = mse_loss(grid_spectra[...,0])
+    print(grid_loss.shape)
 
 with torch.no_grad():
     spectra_optim = sim(X_traj[-1])
@@ -150,16 +153,18 @@ with torch.no_grad():
                         color='grey', alpha=0.5, label="Uncertainity"
                         )
         axs[0].set_title("Loss : %.2f"%loss_optim[i].item())
+
         traj = X_traj.cpu().numpy()[i,:,:]
+        axs[1].tricontourf(grid_comps[:,0], grid_comps[:,1], grid_loss.detach().cpu().numpy(), cmap="binary")
         axs[1].plot(traj[:,0], traj[:,1],
-                    lw=2,c='k', label="Trajectory"
+                    lw=2,c='tab:red', label="Trajectory"
                     )
         axs[1].scatter(traj[0,0], traj[0,1],
-                       s=100,c='k',marker='.',
+                       s=100,c='tab:red',marker='.',
                        zorder=10,lw=2, label="Initial"
                        )
         axs[1].scatter(traj[-1,0], traj[-1,1],
-                       s=100,c='k',marker='+',
+                       s=100,c='tab:red',marker='+',
                        zorder=10,lw=2, label="Final"
                        )
         axs[1].set_xlim(*design_space_bounds[0])
@@ -167,13 +172,6 @@ with torch.no_grad():
         axs[1].legend()
         plt.savefig(SAVE_DIR+"comparision_%d.png"%i)
         plt.close()
-
-# Compute loss function on a grid for plotting
-with torch.no_grad():
-    grid_comps = get_twod_grid(15, bounds=bounds.cpu().numpy())
-    grid_spectra = sim(torch.from_numpy(grid_comps).view(225, 1, 2).to(device))
-    grid_loss = mse_loss(grid_spectra[...,0])
-    print(grid_loss.shape)
 
 # create result object and save
 optim_result = {"X_traj" : X_traj,
