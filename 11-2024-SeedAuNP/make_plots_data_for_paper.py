@@ -3,11 +3,12 @@ import numpy as np
 import matplotlib.pyplot as plt 
 import matplotlib.ticker as ticker
 import pandas as pd 
-import pdb, argparse, json, glob, pickle
+import pdb, argparse, json, glob, pickle, os
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 torch.set_default_dtype(torch.double)
-
+torch.cuda.empty_cache()
+os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True'
 from activephasemap.models.np import NeuralProcess
 from activephasemap.simulators import UVVisExperiment
 from activephasemap.models.xgb import XGBoost
@@ -59,24 +60,28 @@ def sample_grid(n_grid_spacing):
 
 grid_comps, grid_spectra = sample_grid(10)
 np.savez("./paper/grid_data_10_%d.npz"%ITERATION, comps=grid_comps, spectra=grid_spectra)
+del grid_comps, grid_spectra
 
 if ITERATION==TOTAL_ITERATIONS:
     grid_comps, grid_spectra = sample_grid(20)
     np.savez("./paper/grid_data_20.npz", comps=grid_comps, spectra=grid_spectra)
+    del grid_comps, grid_spectra
 
     grid_comps, grid_spectra = sample_grid(30)
     np.savez("./paper/grid_data_30.npz", comps=grid_comps, spectra=grid_spectra)
+    del grid_comps, grid_spectra
 
 """ 2. Create acqusition function data """
 
 acqf = XGBUncertainity(expt, expt.bounds, np_model, comp_model)
-C_grid = get_twod_grid(30, bounds_np)
+C_grid = get_twod_grid(15, bounds_np)
 with torch.no_grad():
     acq_values = acqf(torch.tensor(C_grid).reshape(len(C_grid),1,2).to(device)).squeeze().cpu().numpy()
 
 np.savez("./paper/acqf_data_%d.npz"%ITERATION, comps=C_grid, values=acq_values)
 
 """ 3. Create data for train and test errors """
+del acq_values
 
 def load_models_from_iteration(i):
     expt = UVVisExperiment(design_space_bounds, "./data/")
@@ -105,7 +110,7 @@ def get_accuracy(comps, domain, spectra, comp_model, np_model):
     sigma = torch.stack(sigma)
     target = torch.from_numpy(spectra)
     loss = torch.abs((target-mu)/(sigma+1e-8)).mean(dim=1)
-    
+
     return loss.detach().cpu().squeeze().numpy()
 
 def get_accuraciy_plot_data():
