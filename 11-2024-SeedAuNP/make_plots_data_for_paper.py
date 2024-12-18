@@ -13,6 +13,7 @@ from activephasemap.models.np import NeuralProcess
 from activephasemap.simulators import UVVisExperiment
 from activephasemap.models.xgb import XGBoost
 from activephasemap.utils import *
+from apdist.distances import AmplitudePhaseDistance as dist
 
 parser = argparse.ArgumentParser(
                     prog='Train emulator of gold nanoparticle synthesis',
@@ -98,31 +99,41 @@ def load_models_from_iteration(i):
 
     return expt, comp_model, np_model
 
+def min_max_normalize(x):
+    min_x = x.min(dim=1).values 
+    max_x = x.max(dim=1).values
+    x_norm = (x - min_x[:,None])/((max_x-min_x)[:,None])
+    
+    return x_norm
+
 @torch.no_grad()
 def get_accuracy(comps, domain, spectra, comp_model, np_model):
-    mu, sigma = [], []
+    loss = []
+    optim_kwargs = {"optim":"DP", "grid_dim":10}
     for i in range(comps.shape[0]):
-        mu_i,sigma_i = from_comp_to_spectrum(domain, comps[i,:], comp_model, np_model)
-        mu.append(mu_i)
-        sigma.append(sigma_i)
-    
-    mu = torch.stack(mu)
-    sigma = torch.stack(sigma)
-    target = torch.from_numpy(spectra)
-    loss = torch.abs((target-mu)/(sigma+1e-8)).mean(dim=1)
+        mu_i, _ = from_comp_to_spectrum(domain, comps[i,:], comp_model, np_model)
+        mu_i_np = mu_i.cpu().squeeze().numpy()
+        mu_i_norm = (mu_i_np - min(mu_i_np))/(max(mu_i_np)-min(mu_i_np))
+        spectra_i_norm =  (spectra[i,:] - min(spectra[i,:]))/(max(spectra[i,:])-min(spectra[i,:]))
+        amplitude, phase = dist(domain, 
+                                spectra_i_norm, 
+                                mu_i_norm, 
+                                **optim_kwargs
+                                )
+        loss.append(0.5*(amplitude+phase))
 
-    return loss.detach().cpu().squeeze().numpy()
+    return np.asarray(loss)
 
 def get_accuraciy_plot_data():
     accuracies = {}
     for i in range(1,TOTAL_ITERATIONS+1):
         expt, comp_model, np_model = load_models_from_iteration(i)
         train_accuracy = get_accuracy(expt.comps.astype(np.double), 
-                                        expt.t, 
-                                        expt.spectra_normalized, 
-                                        comp_model, 
-                                        np_model
-                                        )
+                                      expt.t, 
+                                      expt.spectra_normalized, 
+                                      comp_model, 
+                                      np_model
+                                    )
         if not i==TOTAL_ITERATIONS:
             next_comps = np.load("./data/comps_%d.npy"%(i)).astype(np.double)
             next_spectra = np.load("./data/spectra_%d.npy"%(i))

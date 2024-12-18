@@ -39,6 +39,11 @@ np_model.load_state_dict(torch.load(DATA_DIR+'np_model_%d.pt'%(ITERATION), map_l
 np_model.train(False)
 
 # Load trained composition to latent model for p(z|c)
+xgb_model_args = {"objective": "reg:squarederror",
+                  "max_depth": 3,
+                  "eta": 0.1,
+                  "eval_metric": "rmse"
+                  }
 comp_model = XGBoost(xgb_model_args)
 comp_model.load(DATA_DIR+"comp_model_%d.json"%ITERATION)
 

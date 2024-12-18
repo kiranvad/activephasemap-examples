@@ -11,8 +11,8 @@ from autophasemap import multi_kmeans_run, compute_BIC
 from utils import AutoPhaseMapDataSet
 
 # Specify variables
-N_INIT_RUNS = 2
-MAX_ITER = 10
+N_INIT_RUNS = 10
+MAX_ITER = 50
 VERBOSE = 3
 GAMMA_GRID_N = 10
 N_CLUSTERS = 3
@@ -46,11 +46,11 @@ def plot(data, out):
 
 grid = np.load(DATA_DIR+"/paper/grid_data_20.npz")
 grid_comps = grid["comps"]
-grid_spectra = grid["spectra"]
+grid_spectra = grid["spectra"][...,0]
 
 t = np.linspace(0,1, grid_spectra.shape[1])
 
-data = AutoPhaseMapDataSet(grid_comps, t, grid_spectra[...,0])
+data = AutoPhaseMapDataSet(grid_comps, t, grid_spectra)
 data.generate()
 
 out, bic = multi_kmeans_run(N_INIT_RUNS, 
@@ -63,9 +63,7 @@ out, bic = multi_kmeans_run(N_INIT_RUNS,
                             )
 
 with open(SAVE_DIR+'/result_%d.pkl'%N_CLUSTERS, 'wb') as handle:
-    pickle.dump(out._asdict(), handle, 
-        protocol=pickle.HIGHEST_PROTOCOL
-        )
+    pickle.dump(out._asdict(), handle, protocol=pickle.HIGHEST_PROTOCOL)
 
 # plot phase map and corresponding spectra
 fig, axs = plot(data, out)

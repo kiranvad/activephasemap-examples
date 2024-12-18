@@ -6,36 +6,19 @@ import ray
 import torch
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 torch.set_default_dtype(torch.double)
-from botorch.utils.transforms import normalize
 
-from activephasemap.models.np import NeuralProcess
-from activephasemap.utils.settings import initialize_model
-from activephasemap.utils.simulators import UVVisExperiment
-import matplotlib.ticker as ticker
-from activephasemap.utils.settings import from_comp_to_spectrum, get_twod_grid, AutoPhaseMapDataSet
-from activephasemap.utils.visuals import MinMaxScaler, scaled_tickformat, _inset_spectra 
-
-from autophasemap import multi_kmeans_run, compute_BIC, BaseDataSet
+from autophasemap import multi_kmeans_run, compute_BIC
+from utils import AutoPhaseMapDataSet
 
 # Specify variables
 N_CLUSTERS_MIN = 1
-N_CLUSTERS_MAX = 5
-N_INIT_RUNS = 10
+N_CLUSTERS_MAX = 10
+N_INIT_RUNS = 25
 MAX_ITER = 50
 VERBOSE = 3
 GAMMA_GRID_N = 7
-ACTIVEPHASEMAP_EXPT = "peptide_aunp_2D"
-
-if ACTIVEPHASEMAP_EXPT=="expt-test":
-    SAVE_DIR = "/mmfs1/home/kiranvad/kiranvad/papers/autophasemap/expts"+'/output/expt_test_sweep/'
-    ITERATION = 8
-    DATA_DIR = "/mmfs1/home/kiranvad/kiranvad/activephasemap-examples/expt-test"
-    design_space_bounds = [(0.0, 7.38), (0.0,7.27)]
-elif ACTIVEPHASEMAP_EXPT=="peptide_aunp_2D":
-    DATA_DIR = "/mmfs1/home/kiranvad/cheme-kiranvad/activephasemap-examples/040824/2D/"
-    SAVE_DIR = DATA_DIR+"phasemap/"
-    design_space_bounds = [(0.0, 87.0), (0.0,11.0)]
-    ITERATION = len(glob.glob(DATA_DIR+"data/spectra_*.npy"))
+DATA_DIR = "/mmfs1/home/kiranvad/cheme-kiranvad/activephasemap-examples/11-2024-SeedAuNP"
+SAVE_DIR = DATA_DIR+"/autophasemap/sweep/"
 
 if os.path.exists(SAVE_DIR):
     shutil.rmtree(SAVE_DIR)
@@ -50,16 +33,6 @@ else:
              _redis_password=os.environ["redis_password"]
              )
 
-grid_comps = np.load(DATA_DIR+"/grid/grid_comps.npy")
-grid_spectra = np.load(DATA_DIR+"/grid/grid_spectra.npy")
-grid_spectra = grid_spectra/grid_spectra[:,0][:,None]
-t = np.linspace(0,1, grid_spectra.shape[1])
-print("Compositions shape: ", grid_comps.shape)
-print("Spectra shape : ", grid_spectra.shape)
-
-data = AutoPhaseMapDataSet(grid_comps,t, grid_spectra)
-data.generate(process=None)
-
 def plot(data, out):
     fig, axs = plt.subplots(1,N_CLUSTERS_MAX+1, figsize=(4*(N_CLUSTERS_MAX+1), 4))
     fig.subplots_adjust(wspace=0.5)
@@ -73,6 +46,16 @@ def plot(data, out):
 
     return fig, axs
 
+grid = np.load(DATA_DIR+"/paper/grid_data_20.npz")
+grid_comps = grid["comps"]
+grid_spectra = grid["spectra"][...,0]
+t = np.linspace(0, 1, grid_spectra.shape[1])
+print("Compositions shape: ", grid_comps.shape)
+print("Spectra shape : ", grid_spectra.shape)
+
+data = AutoPhaseMapDataSet(grid_comps,t, grid_spectra)
+data.generate(process=None)
+
 BIC_LIST = []
 for N_CLUSTERS in np.arange(N_CLUSTERS_MIN,N_CLUSTERS_MAX+1):
     print("Running autophasemap with %d clusters..."%N_CLUSTERS)
@@ -85,14 +68,12 @@ for N_CLUSTERS in np.arange(N_CLUSTERS_MIN,N_CLUSTERS_MAX+1):
                                 N_CLUSTERS, 
                                 max_iter=MAX_ITER, 
                                 verbose=VERBOSE, 
-                                smoothen=True,
+                                smoothen=False,
                                 grid_dim = GAMMA_GRID_N
                                 )
 
     with open(SAVE_DIR+'/result_%d.pkl'%N_CLUSTERS, 'wb') as handle:
-        pickle.dump(out._asdict(), handle, 
-            protocol=pickle.HIGHEST_PROTOCOL
-            )
+        pickle.dump(out._asdict(), handle, protocol=pickle.HIGHEST_PROTOCOL)
     
     np.save(SAVE_DIR+"/bic_%d.npy"%N_CLUSTERS, np.asarray(bic))
 
