@@ -14,6 +14,8 @@ from activephasemap.simulators import UVVisExperiment
 from activephasemap.models.xgb import XGBoost
 from activephasemap.utils import *
 from apdist.distances import AmplitudePhaseDistance as dist
+from apdist.geometry import SquareRootSlopeFramework as SRSF
+from scipy.ndimage import gaussian_filter
 
 parser = argparse.ArgumentParser(
                     prog='Train emulator of gold nanoparticle synthesis',
@@ -106,6 +108,36 @@ def min_max_normalize(x):
     
     return x_norm
 
+def smoothen_and_normalize(y):
+    y_hat = gaussian_filter(y,  sigma=1.0)
+    y_hat_norm =  (y_hat-min(y_hat))/(max(y_hat)-min(y_hat))
+
+    return y_hat_norm
+
+def weighted_amplitude_phase(x, y_ref, y_query, **kwargs):
+    srsf = SRSF(x)
+    q_ref = srsf.to_srsf(smoothen_and_normalize(y_ref))
+    q_query = srsf.to_srsf(smoothen_and_normalize(y_query))
+    gamma = srsf.get_gamma(q_ref, q_query, **kwargs)
+
+    delta = q_ref-q_query
+    if delta.sum() == 0:
+        dist = 0
+    else:
+        gam_dev = np.gradient(gamma, srsf.time)
+        q_gamma = np.interp(gamma, srsf.time, q_query)
+        y_amplitude = (q_ref - (q_gamma * np.sqrt(gam_dev))) ** 2
+
+        amplitude = np.sqrt(np.trapz(y_amplitude, srsf.time))
+
+        p_gamma = np.sqrt(gam_dev)*y_ref # we define p(\gamma) = \sqrt{\dot{\gamma(t)}} * f(t)
+        p_identity = np.ones_like(gam_dev)*y_ref
+        y_phase =  (p_gamma - p_identity) ** 2
+
+        phase = np.sqrt(np.trapz(y_phase, srsf.time))
+
+    return amplitude, phase
+
 @torch.no_grad()
 def get_accuracy(comps, domain, spectra, comp_model, np_model):
     loss = []
@@ -115,11 +147,7 @@ def get_accuracy(comps, domain, spectra, comp_model, np_model):
         mu_i_np = mu_i.cpu().squeeze().numpy()
         mu_i_norm = (mu_i_np - min(mu_i_np))/(max(mu_i_np)-min(mu_i_np))
         spectra_i_norm =  (spectra[i,:] - min(spectra[i,:]))/(max(spectra[i,:])-min(spectra[i,:]))
-        amplitude, phase = dist(domain, 
-                                spectra_i_norm, 
-                                mu_i_norm, 
-                                **optim_kwargs
-                                )
+        amplitude, phase = weighted_amplitude_phase(domain, spectra[i,:], mu_i_np)
         loss.append(0.5*(amplitude+phase))
 
     return np.asarray(loss)
