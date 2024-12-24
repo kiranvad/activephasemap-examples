@@ -82,10 +82,9 @@ with torch.no_grad():
     acq_values = acqf(torch.tensor(C_grid).reshape(len(C_grid),1,2).to(device)).squeeze().cpu().numpy()
 
 np.savez("./paper/acqf_data_%d.npz"%ITERATION, comps=C_grid, values=acq_values)
-
-""" 3. Create data for train and test errors """
 del acq_values
 
+""" 3. Create data for train and test errors """
 def load_models_from_iteration(i):
     expt = UVVisExperiment(design_space_bounds, "./data/")
     expt.read_iter_data(i)
