@@ -7,12 +7,15 @@ import pdb, argparse, json, glob, pickle
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 torch.set_default_dtype(torch.double)
-from torch.autograd import Variable
+from torch.profiler import profile, record_function, ProfilerActivity
+
 from activephasemap.models.np import NeuralProcess
 from activephasemap.simulators import UVVisExperiment
 from activephasemap.models.xgb import XGBoost
 from activephasemap.utils import *
 from funcshape.functions import Function
+import adaptive
+from scipy.spatial import Delaunay
 
 ITERATION = 14
 
@@ -43,7 +46,7 @@ def get_spectrum(c):
     # predict z value from the comp model
     z_mu, z_std = comp_model.predict(c)   
     nr, nb, dz = z_mu.shape
-    nz  = 32
+    nz  = 128
     z_dist = torch.distributions.Normal(z_mu, z_std)
     z = z_dist.rsample(torch.Size([nz])).view(nz*nr*nb, dz)
     t = torch.from_numpy(t_np).repeat(nz*nr*nb, 1, 1).to(device)
@@ -84,92 +87,88 @@ def compute_gradient(xt, f, norm):
     tangent_vectors = xt.squeeze()*df_dx
     grad, grad_norm = norm(yt, tangent_vectors.squeeze())
 
-    return tangent_vectors, grad, grad_norm
+    del yt, df_dx, tangent_vectors
+    torch.cuda.empty_cache()  # Clear the GPU cache
+
+    return grad, grad_norm
 
 def evaluate_batch_gradients(x, f):
     n_samples, dx = x.shape
-    batch_comps = torch.from_numpy(grid_comps).to(device).view(n_samples, 1, dx)
-    batch_spectra = f(batch_comps)
-    grad_norms = torch.zeros(n_samples)
-    tangent_vectors = torch.zeros((n_samples, len(t_np), dx))
-    grad = torch.zeros(n_samples, dx)
+    batch_comps = torch.from_numpy(x).to(device)
+    grad_norms, grad = [], []
     norm = lambda fx, tv : fisher_rao_norm(torch.from_numpy(t_np).to(device), fx, tv)
     for i in range(n_samples):
+        print("Computing gradient of %d/%d"%(i, n_samples), end="\r", flush=True)
         xi = batch_comps[i,...].view(1, 1, dx).clone().detach().requires_grad_(True)
-        tangent_vectors_xi, grads_xi, grad_norms_xi = compute_gradient(xi, f, norm)
-        grad_norms[i] = grad_norms_xi
-        tangent_vectors[i,...] = tangent_vectors_xi 
-        grad[i,...] = grads_xi
+        grads_xi, grad_norms_xi = compute_gradient(xi, f, norm)
+        grad_norms.append(grad_norms_xi)
+        grad.append(grads_xi)
     
-    return batch_spectra, grad_norms, tangent_vectors, grad
-
-def adaptive_sampling(p, points, refinement_threshold=0.8, max_iterations=4):
-    """
-    Refines the grid adaptively based on the density function p(x).
-    """
-    for _ in range(max_iterations):
-        # Evaluate p(x) on current points
-        p_values,_,_ = p(points)
-        high_density = points[p_values > refinement_threshold*max(p_values)]
-        
-        # Subdivide regions with high density
-        subdivided = []
-        for point in high_density:
-            step = (points[1,0] - points[0,0]) / 2  # Half the step size
-            new_points = [point + np.array([dx, dy]) * step 
-                          for dx in [-0.5, 0.5] for dy in [-0.5, 0.5]]
-            subdivided.extend(new_points)
-        
-        # Add new points and ensure uniqueness
-        points = np.vstack([points, subdivided])
-        points = np.unique(points, axis=0)
-    
-    return points
+    return torch.stack(grad_norms), torch.stack(grad)
 
 # compute values on a grid
-grid_comps = get_twod_grid(20, np.asarray(design_space_bounds).T)
-grid_spectra, grad_norms_grid, tangent_vectors_grid, grad_grid = evaluate_batch_gradients(grid_comps, get_spectrum)
+grid_comps = get_twod_grid(18, np.asarray(design_space_bounds).T)
+grad_norms_grid, grad_grid = evaluate_batch_gradients(grid_comps, get_spectrum)
 
-print("grid data : ", grid_comps.shape, grid_spectra.shape)
-print("Gradient data : ", grad_norms_grid.shape, tangent_vectors_grid.shape, grad_grid.shape)
-
-# # perform adaptive sampling
-# grid_comps = adaptive_sampling(grad_norms_grid.detach().cpu().squeeze(),
-#                                grid_comps.cpu().squeeze()
-#                             )
-# n_samples, dx = grid_comps.shape
-# grid_comps = torch.from_numpy(grid_comps).to(device).view(n_samples, 1, dx)
-# grid_spectra = get_spectrum(grid_comps)
-# grad_norms_grid, tangent_vectors_grid, grad_grid = evaluate_grid_gradients(grid_comps, grid_spectra)
-# print("Gradient data : ", grad_norms_grid.shape, tangent_vectors_grid.shape, grad_grid.shape)
+print("grid data : ", grid_comps.shape)
+print("Grid Gradient data : ", grad_norms_grid.shape, grad_grid.shape)
 
 with torch.no_grad():
-    example_idx = np.random.randint(0, grid_comps.shape[0]-1)
-    plt.figure(figsize=(8, 6))
-    plt.plot(t_np, grid_spectra[example_idx,:].cpu().numpy(), color="k")
-    for dim, label in zip(range(2), ["x1", "x2"]):
-        plt.plot(t_np, tangent_vectors_grid[example_idx, :, dim ].cpu().numpy(), label=f"∂f/∂{label}")
-    plt.title(f"Gradients in L2 Space for Sample Point {grid_comps[example_idx, :]}")
-    plt.xlabel("t (Discretized L2 space)")
-    plt.ylabel("Gradient")
-    plt.legend()
-    plt.grid(alpha=0.3)
-
-    plt.savefig("plot_function_gradient.png")
-    plt.close()
-
     fig, ax = plt.subplots()
-    ax.tricontourf(grid_comps[...,0], 
-                   grid_comps[..., 1], 
+    ctr = ax.tricontourf(grid_comps[...,0], grid_comps[..., 1], 
                    grad_norms_grid.detach().cpu().squeeze(),
                    levels=50
                    )
-    ax.quiver(grid_comps[...,0], 
-              grid_comps[..., 1], 
+    plt.colorbar(ctr, label="Gradient Norm")
+    ax.quiver(grid_comps[...,0], grid_comps[..., 1], 
               grad_grid[:,0].detach().cpu().squeeze(), 
               grad_grid[:,1].detach().cpu().squeeze(),
               color="w"
               )
+    ax.scatter(grid_comps[...,0], grid_comps[..., 1], color="k", s=10)
 
     plt.savefig("gradients_quiver.png")
+    plt.close()
+
+"""Perform Adaptive Sampling of the PhaseMap gradients"""
+
+def phasemap_gradient(xy):
+    """A function to compute gradient at any given composition.
+
+    xy : a tuple corresponding to a 2D composition.
+    """
+    c1, c2 = xy
+    comp_np = np.array([c1, c2])
+    # for some reason only the following can track the gradient of x
+    # not directly creating the tensor using torch.tensor
+    comp_tensor = torch.from_numpy(comp_np).to(device).view(1, 1, 2)
+    x = comp_tensor.clone().detach().requires_grad_(True)
+
+    norm = lambda fx, tv : fisher_rao_norm(torch.from_numpy(t_np).to(device), fx, tv)
+    value,_ = compute_gradient(x, get_spectrum, norm)
+
+    return value.detach().cpu().squeeze().numpy()
+
+learner = adaptive.Learner2D(phasemap_gradient, design_space_bounds)
+adaptive.runner.simple(learner, goal=lambda l: l.npoints > 100)
+data = learner.data
+with torch.no_grad():
+    x, y = zip(*data.keys())
+    tri = Delaunay(np.column_stack((x, y)))
+
+    fig, ax = plt.subplots()
+    contour =  ax.tricontourf(grid_comps[...,0],
+                            grid_comps[..., 1], 
+                            grad_norms_grid.detach().cpu().squeeze(),
+                            levels=50
+                            )
+    plt.colorbar(contour, label="Gradient Norm")
+    ax.scatter(x, y, s=15, color="k")
+    for simplex in tri.simplices:
+        pts = tri.points[simplex]
+        ax.plot(pts[:, 0], pts[:, 1], 'k-')
+    ax.set_xlabel("x")
+    ax.set_ylabel("y")
+    plt.tight_layout()
+    plt.savefig("adaptive_sampling.png")
     plt.close()
