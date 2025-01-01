@@ -92,44 +92,6 @@ def compute_gradient(xt, f, norm):
 
     return grad, grad_norm
 
-def evaluate_batch_gradients(x, f):
-    n_samples, dx = x.shape
-    batch_comps = torch.from_numpy(x).to(device)
-    grad_norms, grad = [], []
-    norm = lambda fx, tv : fisher_rao_norm(torch.from_numpy(t_np).to(device), fx, tv)
-    for i in range(n_samples):
-        print("Computing gradient of %d/%d"%(i, n_samples), end="\r", flush=True)
-        xi = batch_comps[i,...].view(1, 1, dx).clone().detach().requires_grad_(True)
-        grads_xi, grad_norms_xi = compute_gradient(xi, f, norm)
-        grad_norms.append(grad_norms_xi)
-        grad.append(grads_xi)
-    
-    return torch.stack(grad), torch.stack(grad_norms)
-
-# compute values on a grid
-grid_comps = get_twod_grid(19, np.asarray(design_space_bounds).T)
-grad_grid, grad_norms_grid = evaluate_batch_gradients(grid_comps, get_spectrum)
-
-print("grid data : ", grid_comps.shape)
-print("Grid Gradient data : ", grad_norms_grid.shape, grad_grid.shape)
-
-with torch.no_grad():
-    fig, ax = plt.subplots()
-    ctr = ax.tricontourf(grid_comps[...,0], grid_comps[..., 1], 
-                   grad_norms_grid.detach().cpu().squeeze(),
-                   levels=50
-                   )
-    plt.colorbar(ctr, label="Gradient Norm")
-    ax.quiver(grid_comps[...,0], grid_comps[..., 1], 
-              grad_grid[:,0].detach().cpu().squeeze(), 
-              grad_grid[:,1].detach().cpu().squeeze(),
-              color="w"
-              )
-    ax.scatter(grid_comps[...,0], grid_comps[..., 1], color="k", s=15)
-
-    plt.savefig("gradients_quiver.png")
-    plt.close()
-
 """Perform Adaptive Sampling of the PhaseMap gradients"""
 
 def phasemap_gradient(xy):
@@ -137,6 +99,8 @@ def phasemap_gradient(xy):
 
     xy : a tuple corresponding to a 2D composition.
     """
+    global grads 
+    global num_fevals
     c1, c2 = xy
     comp_np = np.array([c1, c2])
     # for some reason only the following can track the gradient of x
@@ -145,21 +109,65 @@ def phasemap_gradient(xy):
     x = comp_tensor.clone().detach().requires_grad_(True)
 
     norm = lambda fx, tv : fisher_rao_norm(torch.from_numpy(t_np).to(device), fx, tv)
-    _,grad_norm = compute_gradient(x, get_spectrum, norm)
-
+    grad, grad_norm = compute_gradient(x, get_spectrum, norm)
+    grads.append(grad.detach().cpu().squeeze().numpy())
+    print("Evaluated function for the %d-th time"%num_fevals, end="\r", flush=True)
+    num_fevals += 1
     return grad_norm.detach().cpu().squeeze().numpy()
 
-learner = adaptive.Learner2D(phasemap_gradient, design_space_bounds)
-adaptive.runner.simple(learner, goal=lambda l: l.npoints > 95)
-adaptive_samples_data = learner.to_numpy()
+# Evaluate gradients on a grid
+grid_comps = get_twod_grid(20, np.asarray(design_space_bounds).T)
+grid_grads, grid_grad_norms = [], []
+for i, comp in enumerate(grid_comps):
+    print("Computing gradient of %d/%d"%(i, grid_comps.shape[0]), end="\r", flush=True)
+    comp_tensor = torch.from_numpy(comp).to(device).view(1, 1, 2)
+    x = comp_tensor.clone().detach().requires_grad_(True)
+
+    norm = lambda fx, tv : fisher_rao_norm(torch.from_numpy(t_np).to(device), fx, tv)
+    grad, grad_norm = compute_gradient(x, get_spectrum, norm)
+    grid_grads.append(grad.detach().cpu().squeeze().numpy())
+    grid_grad_norms.append(grad_norm.detach().cpu().squeeze().numpy())
+
+grid_grads = np.asarray(grid_grads)
+grid_grad_norms = np.asarray(grid_grad_norms)
+print("grid data : ", grid_comps.shape)
+print("Grid Gradient data : ", grid_grad_norms.shape, grid_grads.shape)
 
 with torch.no_grad():
-    tri = Delaunay(adaptive_samples_data[:,:-1])
+    fig, ax = plt.subplots()
+    ctr = ax.tricontourf(grid_comps[...,0], 
+                         grid_comps[..., 1], 
+                         grid_grad_norms,
+                         levels=50
+                         )
+    plt.colorbar(ctr, label="Gradient Norm")
+    ax.quiver(grid_comps[...,0], 
+              grid_comps[..., 1], 
+              grid_grads[:,0], 
+              grid_grads[:,1],
+              color="w"
+              )
+    ax.scatter(grid_comps[...,0], grid_comps[..., 1], color="k", s=15)
+
+    plt.savefig("gradients_quiver.png")
+    plt.close()
+
+np.savez("../paper/gradient_data.npz", grid_grad = grid_grads, grid_norm = grid_grad_norms)
+del grid_grads, grid_grad_norms
+
+# Collective adaptive samples from the phasemap
+grads = []
+num_fevals = 0
+learner = adaptive.Learner2D(phasemap_gradient, design_space_bounds)
+adaptive.runner.simple(learner, npoints_goal = 10)
+adaptive_samples_data = learner.to_numpy()
+with torch.no_grad():
+    tri = Delaunay(adaptive_samples_data[:,:2])
 
     fig, ax = plt.subplots()
     contour =  ax.tricontourf(adaptive_samples_data[:,0], 
                               adaptive_samples_data[:,1], 
-                              adaptive_samples_data[:,2],
+                              adaptive_samples_data[:,-1],
                               levels=50
                               )
     plt.colorbar(contour, label="Gradient Norm")
@@ -172,10 +180,3 @@ with torch.no_grad():
     plt.tight_layout()
     plt.savefig("adaptive_sampling.png")
     plt.close()
-
-np.savez("../paper/gradient_data.npz", 
-         grid_comps=grid_comps, 
-         grid_grads = grad_grid.detach().cpu().squeeze().numpy(),
-         grid_grad_norms = grad_norms_grid.detach().cpu().squeeze().numpy(),
-         adaptive_samples_data = adaptive_samples_data
-         )

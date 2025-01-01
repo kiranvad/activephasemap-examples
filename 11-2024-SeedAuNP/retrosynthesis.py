@@ -15,7 +15,7 @@ from activephasemap.utils import *
 from funcshape.functions import Function, SRSF
 import optimum_reparamN2 as orN2
 
-TRAINING_ITERATIONS = 500 # total iterations for each optimization
+TRAINING_ITERATIONS = 100 # total iterations for each optimization
 NUM_RESTARTS = 4 # number of optimization from random restarts
 LEARNING_RATE = 1e-1
 TARGET_SHAPE_ID = 1 # chose from [0 - "sphere", 1 - "nanorod"]
@@ -59,8 +59,8 @@ else:
     target = np.load(TARGETS_DIR+"target_nanorod.npz")
 wav = target["x"]
 n_domain = len(wav)
-t = (wav-min(wav))/(max(wav)-min(wav))
-xt = torch.from_numpy(t).to(device)
+t_np = (wav-min(wav))/(max(wav)-min(wav))
+xt = torch.from_numpy(t_np).to(device)
 yt = torch.from_numpy(target["y"]).to(device)
 
 def min_max_normalize(x):
@@ -116,21 +116,23 @@ def amplitude_phase_distance(t_np, f1, f2, **kwargs):
                                       kwargs.get("grid_dim", 7)
                                     )
         gamma = (t_np[-1] - t_np[0]) * gamma + t_np[0]
-    gamma_tensor = torch.tensor(gamma, dtype=f1.dtype, device=f1.device)
+    gamma_tensor = torch.from_numpy(gamma).to(device)
+    gamma_tensor = gamma_tensor.clone().detach().requires_grad_(True)
     warping = Function(t_tensor.squeeze(), gamma_tensor.reshape(-1,1))
 
     # Compute amplitude
     gam_dev = torch.abs(warping.derivative(warping.x))
     q_gamma = q2(warping.fx)
-    y = (q1.qx.squeeze() - (q_gamma.squeeze() * torch.sqrt(gam_dev).squeeze())) ** 2
-    integral = torch.trapezoid(y, q1.x)
-    amplitude = torch.sqrt(integral)
+    y_amplitude = (q1.qx.squeeze() - (q_gamma.squeeze() * torch.sqrt(gam_dev).squeeze())) ** 2
+    amplitude = torch.sqrt(torch.trapezoid(y_amplitude, q1.x))
 
     # Compute phase
-    theta = torch.trapezoid(torch.sqrt(gam_dev).squeeze(), x=warping.x)
-    phase = torch.arccos(torch.clamp(theta, -1, 1))
-    if amplitude.isnan() or phase.isnan():
-        pdb.set_trace()
+    # we define p(\gamma) = \sqrt{\dot{\gamma(t)}} * f(t)
+    p_gamma = torch.sqrt(gam_dev)*(f1_.fx)
+    p_identity = torch.ones_like(gam_dev)*(f1_.fx)
+    y_phase =  (p_gamma - p_identity) ** 2
+    phase = torch.sqrt(torch.trapezoid(y_phase.squeeze(), t_tensor))
+
     return amplitude, phase
 
 def mse_loss(y_pred):
@@ -143,7 +145,7 @@ def mse_loss(y_pred):
 
     return loss.sum(), torch.tensor(loss, dtype=y_pred.dtype, device=y_pred.device)   
 
-def ap_loss(y_pred):
+def ap_loss(y_pred, is_training=True):
     alpha = 0.5
     num_points, _ = y_pred.shape
     target = yt.repeat(num_points, 1)
@@ -152,11 +154,12 @@ def ap_loss(y_pred):
     loss = 0.0
     loss_values = []
     for i in range(num_points):
-        amplitude, phase = amplitude_phase_distance(t, mu_[i,:], target_[i,:])
+        amplitude, phase = amplitude_phase_distance(t_np, mu_[i,:], target_[i,:])
         dist = (1-alpha)*amplitude + (alpha)*phase
+        if is_training:
+            dist.backward(retain_graph=True)
         loss += dist 
         loss_values.append(dist.item())
-        loss += dist
     
     return loss, torch.tensor(loss_values, dtype=y_pred.dtype, device=y_pred.device)
 
@@ -167,8 +170,7 @@ def closure():
 
     lbfgs.zero_grad()
     spectra = sim(X)
-    loss, loss_values = loss_fn(spectra[...,0]) 
-    loss.backward()
+    loss, loss_values = loss_fn(spectra[...,0])
 
     return loss
 
@@ -185,36 +187,53 @@ lbfgs = torch.optim.LBFGS([X],
 
 X_traj, loss_traj, spectra_traj = [], [], []
 loss_fn = ap_loss
+
 # run a basic optimization loop
+counter = 0
 for i in range(TRAINING_ITERATIONS):
     lbfgs.step(closure)
-    
     # clamp values to the feasible set
     for j, (lb, ub) in enumerate(zip(*bounds)):
         X.data[..., j].clamp_(lb, ub) 
-
     # store the optimization trajectory
     # clone and detaching is importat to not meddle with the autograd
     X_traj.append(X.clone().detach())
     loss_traj.append(loss_values.clone().detach())
     spectra_traj.append(spectra.clone().detach())
+
+    current_losses = loss_values.clone().detach()
+    if i==0:
+        best_losses = loss_values.clone().detach()
+    elif torch.linalg.norm(best_losses-current_losses)<1e-2:
+        counter += 1
+    else:
+        best_losses = loss_values.clone().detach()
+        counter = 0
+    
+    if counter>(0.1*TRAINING_ITERATIONS):
+        print("The error has not improved over 10% " + \
+              "of total iterations\nEarly stopping at %d/%d"%(i, TRAINING_ITERATIONS)
+        )
+        break 
+    
     if (i + 1) % 1 == 0:
         print(f"Iteration {i+1:>3}/{TRAINING_ITERATIONS:>3} - Loss: {loss.item():>4.3f}; dX: {X.grad.mean():>.2e}")
 
 # Compute loss function on a grid for plotting
 with torch.no_grad():
     grid_comps = get_twod_grid(15, bounds=bounds.cpu().numpy())
-    grid_spectra = sim(torch.from_numpy(grid_comps).view(225, 1, 2).to(device))
-    _, grid_loss = loss_fn(grid_spectra[...,0])
+    grid_spectra = sim(torch.from_numpy(grid_comps).view(grid_comps.shape[0], 1, 2).to(device))
+    _, grid_loss = loss_fn(grid_spectra[...,0], is_training=False)
     print(grid_loss.shape)
 
 with torch.no_grad():
     spectra_optim = sim(X_traj[-1])
-    _, loss_optim = loss_fn(spectra_optim[...,0])
+    _, loss_optim = loss_fn(spectra_optim[...,0], is_training=False)
     print("Optimized composition : ", X_traj[-1].squeeze()[torch.argmin(loss_optim)])
     X_traj = torch.stack(X_traj, dim=1).squeeze()
     for i in range(NUM_RESTARTS):
         fig, axs = plt.subplots(1,2, figsize=(4*2, 4))
+        fig.subplots_adjust(wspace=0.5)
         mu = spectra_optim[i,:,0].cpu().squeeze().numpy()
         sigma = spectra_optim[i,:,1].cpu().squeeze().numpy()
         axs[0].plot(target["x"], target["y"], label="Target", color="k", ls='--')
@@ -226,7 +245,11 @@ with torch.no_grad():
         axs[0].set_title("Loss : %.2f"%loss_optim[i].item())
 
         traj = X_traj.cpu().numpy()[i,:,:]
-        axs[1].tricontourf(grid_comps[:,0], grid_comps[:,1], grid_loss.detach().cpu().numpy(), cmap="binary")
+        axs[1].tricontourf(grid_comps[:,0], 
+                           grid_comps[:,1], 
+                           grid_loss.detach().cpu().numpy(), 
+                           cmap="binary",
+                           )
         axs[1].plot(traj[:,0], traj[:,1],
                     lw=2,c='tab:red', label="Trajectory"
                     )
@@ -238,8 +261,8 @@ with torch.no_grad():
                        s=100,c='tab:red',marker='+',
                        zorder=10,lw=2, label="Final"
                        )
-        axs[1].set_xlim(*design_space_bounds[0])
-        axs[1].set_ylim(*design_space_bounds[1])
+        # axs[1].set_xlim(*design_space_bounds[0])
+        # axs[1].set_ylim(*design_space_bounds[1])
         axs[1].legend()
         plt.savefig(SAVE_DIR+"comparision_%d.png"%i)
         plt.close()
