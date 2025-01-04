@@ -4,7 +4,7 @@ import matplotlib.pyplot as plt
 torch.set_default_dtype(torch.double)
 from botorch.utils.sampling import draw_sobol_samples
 from torchcubicspline import natural_cubic_spline_coeffs, NaturalCubicSpline 
-import warnings 
+import warnings, pdb, time, datetime
 
 def gold_dielectric_function(x):
     wl = 1239.19/torch.tensor([0.1,0.2,0.3,0.4,0.5,0.5450000,0.5910000,0.6360000,0.64,0.77,0.89,
@@ -28,72 +28,104 @@ def gold_dielectric_function(x):
    
     return eps.real, eps.imag
 
-def sphere_extinction(wavelength, radius, em):
+def LogNormal(mean, std):
+    # Compute parameters of the underlying Normal distribution
+    mu = torch.log(mean**2 / torch.sqrt(std**2 + mean**2))
+    sigma = torch.sqrt(torch.log(1 + (std**2 / mean**2)))
+
+    dist = torch.distributions.LogNormal(mu, sigma)
+
+    return dist
+
+def sphere_extinction(wavelength, radius_mu, radius_sigma, em):
     e1, e2 = gold_dielectric_function(wavelength)
     e = torch.complex(e1, e2)
 
     factor = (e-em)/(e+2*em)
-    scale = (4 * np.pi * (radius**1.5)) / (3 * wavelength)
+    radius = LogNormal(radius_mu, radius_sigma*radius_mu)
+    
+    n_samples = 4096
+    radius_samples = radius.rsample((n_samples, ))
+
+    scale = (4 * np.pi * (radius_samples**1.5)) / (3 * wavelength)
     gamma = scale*factor.imag
 
-    return gamma 
+    return gamma.mean() 
 
-def nanorod_extinction(wavelength, ar, em):
+def nanorod_extinction(wavelength, aspect_ratio_mu, aspect_ratio_sigma, em):
+    aspect_ratio = LogNormal(aspect_ratio_mu, aspect_ratio_sigma*aspect_ratio_mu)
+    n_samples = 4096
+    ar_samples = aspect_ratio.rsample((n_samples, ))
+    flags = ar_samples>1.0
+
     e1, e2 = gold_dielectric_function(wavelength)
     scale = (2 * np.pi * (em**1.5)) / (3 * wavelength)
-    e = torch.sqrt(1 - (1 / ar)**2)
+    
+    e = torch.sqrt(1 - (1 / ar_samples[flags])**2)
     PA = ( (1 - e**2)/ e**2 ) * ( ((1/ (2 * e)) * torch.log((1 + e) / (1 - e))) - 1 )
     PB = 0.5 * (1 - PA) 
     PC = 0.5 * (1 - PA)
-    gamma = 0.0
+    gamma = []
     for P in [PA, PB, PC]:
         gj = (e2/ (P**2) )/( ( e1 + (((1-P)/P)*em) )**2 + e2**2)
-        gamma += gj
+        gamma.append(gj)
 
-    ext = scale*gamma
+    ext = scale*(torch.stack(gamma).mean(dim=1).sum())
 
-    return ext    
+    return ext      
 
 def fit_mie_scattering(objective, design_space_bounds, **kwargs):
-    n_iterations = kwargs.get("n_iterations", 100)
-    n_restarts = kwargs.get("n_restarts", 10)
+    n_iterations = kwargs.get("n_iterations", 1000)
+    n_restarts = kwargs.get("n_restarts", 100)
     epsilon = kwargs.get("epsilon", 0.1)
     lr = kwargs.get("lr", 0.01)
 
-    best_error = np.inf 
     bounds = torch.tensor(design_space_bounds).transpose(-1, -2)
     samples = draw_sobol_samples(bounds=bounds, n=n_restarts, q=1).view(n_restarts, len(design_space_bounds))
+
+    pruning_errors = []
     for i in range(n_restarts):
         X = samples[i,...].clone().detach()
-        X.requires_grad_(True)
-        optimizer = torch.optim.Adam([X], lr=lr)
-        print("Run %d/%d"%(i+1, n_restarts))
-        
-        for j in range(n_iterations):
-            optimizer.zero_grad()
-            loss = objective(X)
-            loss.backward() 
-            optimizer.step()
+        loss = objective(X)
+        pruning_errors.append(loss)
 
-            # clamp values to the feasible set
-            for k, (lb, ub) in enumerate(zip(*bounds)):
-                X.data[..., k].clamp_(lb, ub) 
+    pruning_errors = torch.tensor(pruning_errors)
+    best_starting_id = torch.argmin(pruning_errors)
 
-            if (j + 1) % 25 == 0:
-                print(f"Iteration {j+1:>3}/{n_iterations:>3} - Loss: {loss.item():>4.3f}; dX: {X.grad.squeeze()}")
+    X = samples[best_starting_id,...].clone().detach()
+    X.requires_grad_(True)
+    optimizer = torch.optim.Adam([X], lr=lr)
+    
+    start = time.time()
+    for j in range(n_iterations):
+        optimizer.zero_grad()
+        loss = objective(X)
+        loss.backward() 
+        optimizer.step()
 
-            if loss.item()<epsilon:
-                best_error = loss.item()
-                best_X = X.clone().detach()
-                break
-            elif loss.isnan():
-                warnings.warn("Loss became nan at: ", X.squeeze())
-                break
+        # clamp values to the feasible set
+        for k, (lb, ub) in enumerate(zip(*bounds)):
+            X.data[..., k].clamp_(lb, ub) 
 
-        if loss.item()<best_error:
+        if (100*j/n_iterations)%10==0:
+            print(f"Iteration {j+1:>3}/{n_iterations:>3} - Loss: {loss.item():>4.3f}; dX: {X.grad.squeeze()}")
+
+        if loss.item()<epsilon:
             best_error = loss.item()
             best_X = X.clone().detach()
-    print("Best parameters : ", best_X.squeeze(), "\nBest Error : ", best_error)
+            print("Error threshold of %.2f reached."%best_error)
+            break
+        else:
+            best_error = loss.item()
+            best_X = X.clone().detach()       
+
+    end = time.time()
+    time_str =  str(datetime.timedelta(seconds=end-start)) 
+
+    print("Best parameters : ", best_X.squeeze(), 
+          "\nBest Error : ", best_error,
+          "\nTotal time : ", time_str
+          )
 
     return best_X, best_error
 
