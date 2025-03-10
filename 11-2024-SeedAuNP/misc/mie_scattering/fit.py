@@ -12,10 +12,12 @@ from mie import *
 from activephasemap.simulators import UVVisExperiment
 from scipy.signal import find_peaks
 
-TESTING = True
+TESTING = False
+TEST_SAMPLE_ID = 30
+FIT_EXPT = False 
 
 if not TESTING:
-    SAVE_DIR = "./results_sph/"
+    SAVE_DIR = "./results_grid/"
     if os.path.exists(SAVE_DIR):
         shutil.rmtree(SAVE_DIR)
     os.makedirs(SAVE_DIR)
@@ -24,11 +26,19 @@ DATA_DIR = "/mmfs1/home/kiranvad/cheme-kiranvad/activephasemap-examples/11-2024-
 ITERATION = 14
 grid_data = np.load(DATA_DIR + "/paper/grid_data_10_%d.npz"%ITERATION)
 grid_spectra = grid_data["spectra"]
+
 design_space_bounds = [(0.0, 35.0), (0.0, 35.0)]
 expt = UVVisExperiment(design_space_bounds, DATA_DIR+"/data/")
 expt.read_iter_data(ITERATION)
 expt.generate(use_spline=True)
 wavelengths = torch.from_numpy(expt.wl)
+
+if FIT_EXPT:
+    comps = expt.comps
+    spectra = expt.spectra_normalized
+else:
+    comps = grid_data["comps"]
+    spectra = grid_spectra[:,:,0]
 
 def normalize(x):
     return (x-min(x))/(1e-3+ max(x) - min(x))
@@ -78,95 +88,48 @@ def gaussian_filter(input_tensor, sigma=1.0, truncate=4.0):
 
     return filtered_tensor
 
-def objective_mixed(target_spectra, x):
-    error = 0.0
+def simulate_spectra(x):
     s_sphere = torch.zeros_like(wavelengths)
     s_nanorod = torch.zeros_like(wavelengths)
     for i, wl in enumerate(wavelengths):
-        s_sphere[i] = sphere_extinction(wl, *x[:3])
-        s_nanorod[i] = nanorod_extinction(wl, *x[3:-1])
+        s_sphere[i] = sphere_extinction(wl, x[0])
+        s_nanorod[i] = nanorod_extinction(wl, *x[1:-1])
 
     s_nanorod = gaussian_filter(s_nanorod)
     s_sphere = gaussian_filter(s_sphere)
     s_query = x[-1]*normalize(s_sphere)+(1-x[-1])*normalize(s_nanorod)
-    
-    error = (s_query-normalize(target_spectra))**2 
-           
-    return error.sum()
-
-def objective_sphere(target_spectra, x):
-    error = 0.0
-    s_query = torch.zeros_like(wavelengths)
-    for i, wl in enumerate(wavelengths):
-        s_query[i] = sphere_extinction(wl, *x)
-
-    s_query = gaussian_filter(s_query)
-    error = (normalize(s_query)-normalize(target_spectra))**2 
-           
-    return error.sum()
+               
+    return s_query
 
 
-parameters_bounds_mixed = [(2.0, 50.0), # sphere radius (mu)
-                        (0.001, 0.4), # sphere radius (sigma)
-                       (1.0, 10), # dieletric constant for sphereical medium
+parameters_bounds = [(1.0, 10), # dieletric constant for sphereical medium
                        (1.1, 5.0), # nanorod aspect ratio (mu)
                        (0.001, 0.4), # nanorod aspect ratio (sigma)
                        (1.0, 10.0), # dieletric constant for nanorod medium
                        (0.0, 1.0), # mixed model weights
                        ]
 
-parameters_bounds_sphere = [(2.0, 50.0), # sphere radius (mu)
-                        (0.001, 0.4), # sphere radius (sigma)
-                       (1.0, 10), # dieletric constant for sphereical medium
-                       ]
 
-def get_fit_params(spectra):
-    feats = featurize(expt.wl, spectra)
-    if feats==1:
-        objective = lambda x : objective_sphere(spectra, x)
-        parameters_bounds = parameters_bounds_sphere
-    elif feats==2:
-        objective = lambda x : objective_mixed(spectra, x)
-        parameters_bounds = parameters_bounds_mixed    
-    else:
-        warnings.warn("Seed solution spectra need not be.")
-        objective = None 
-        parameters_bounds = None 
-
-    return feats, objective, parameters_bounds 
-
-for sample_id in range(expt.spectra_normalized.shape[0]):
+for sample_id in range(comps.shape[0]):
     if TESTING:
-        sample_id = 75
-    target_spectra = torch.from_numpy(expt.spectra_normalized[sample_id,:])
-    feats, objective, parameters_bounds = get_fit_params(target_spectra)
+        sample_id = TEST_SAMPLE_ID
+    target_spectra = torch.from_numpy(spectra[sample_id,:])
+    feats = featurize(expt.wl, target_spectra)
+
+    def objective(x):
+        s_query = simulate_spectra(x)
+        error = (s_query-normalize(target_spectra))**2
+        return error.sum()
+
     if feats in [0]:
-        print("Skipping %d at composition : "%sample_id, expt.comps[sample_id,:])
+        print("Skipping %d at composition : "%sample_id, comps[sample_id,:])
         continue
 
-    print("Fitting %d at composition : "%sample_id, expt.comps[sample_id,:], " with features %d"%feats)
-    fit_kwargs = {"n_iterations": 1000, "n_restarts": 100, "epsilon": 0.5, "lr":0.01}
+    print("Fitting %d at composition : "%sample_id, comps[sample_id,:], " with features %d"%feats)
+    fit_kwargs = {"n_iterations": 250, "n_restarts": 250, "epsilon": 0.1, "lr":0.01}
     best_X, best_error = fit_mie_scattering(objective, parameters_bounds, **fit_kwargs)
 
-    if feats==2:
-        s_sphere = torch.zeros_like(wavelengths)
-        s_nanorod = torch.zeros_like(wavelengths)
-        for i, wl in enumerate(wavelengths):
-            s_sphere[i] = sphere_extinction(wl, *best_X[:3])
-            s_nanorod[i] = nanorod_extinction(wl, *best_X[3:-1])
-
-        s_nanorod = gaussian_filter(s_nanorod)
-        s_sphere = gaussian_filter(s_sphere)
-
-        spectra_optimized = best_X[-1]*normalize(s_sphere) + (1-best_X[-1])*normalize(s_nanorod)
-
-    elif feats==1:
-        s_sphere = torch.zeros_like(wavelengths)
-        for i, wl in enumerate(wavelengths):
-            s_sphere[i] = sphere_extinction(wl, *best_X)
-        s_sphere = gaussian_filter(s_sphere)
-
-        spectra_optimized = normalize(s_sphere)
+    spectra_optimized = simulate_spectra(best_X)
 
     if not TESTING:
         np.savez(SAVE_DIR+"res_%d.npz"%sample_id,

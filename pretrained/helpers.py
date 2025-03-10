@@ -5,8 +5,10 @@ from torch.utils.data import Dataset
 RNG = np.random.default_rng()
 import glob, pdb
 import matplotlib.pyplot as plt
+
 from activephasemap.models.np import context_target_split
-from activephasemap.utils.visuals import _inset_spectra, MinMaxScaler, scaled_tickformat
+from activephasemap.utils import _inset_spectra
+from activephasemap.simulators import MinMaxScaler, scaled_tickformat
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 class UVVisDataset(Dataset):
@@ -34,6 +36,34 @@ class UVVisDataset(Dataset):
 
         return wl_, I_
 
+class SAXSDataSet(Dataset):
+    def __init__(self, root_dir, n_sub_sample = 1000):
+        """
+        Arguments:
+            root_dir (string): Directory with all the data.
+        """
+        self.dir = root_dir
+        self.models = ["sphere", 
+                       "cylinder", 
+                       "ellipsoid", 
+                       "elliptical_cylinder"
+                       ]
+        self.ns = n_sub_sample
+        self.q = np.log10(np.load(self.dir+"/q_values.npy"))
+        self.xrange = [self.q.min(), self.q.max()]  
+
+    def __len__(self):
+        return len(self.models)*self.ns
+
+    def __getitem__(self, i):
+        quotient, remainder = divmod(i, self.ns)
+        data = np.load(self.dir+"/data_by_models/%s.npy"%self.models[quotient])
+        I = np.log10(data[remainder,:])
+        q = torch.tensor(self.q).unsqueeze(1).to(torch.double)
+        I_ = torch.tensor(I).unsqueeze(1).to(torch.double)
+
+        return q, I_
+
 def plot_samples(ax, model, x_target, z_dim, num_samples=100):
     z_sample = torch.randn((num_samples, z_dim))
     with torch.no_grad():
@@ -47,7 +77,12 @@ def plot_posterior_samples(x_target, data_loader, model):
     fig, axs = plt.subplots(2,5, figsize=(4*5, 4*2))
     for ax in axs.flatten():
         x, y = next(iter(data_loader))
-        x_context, y_context, _, _ = context_target_split(x[0:1], y[0:1], 50, 50)
+        n_domain = x.shape[1]
+        x_context, y_context, _, _ = context_target_split(x[0:1], 
+                                                          y[0:1], 
+                                                          int(n_domain/2), 
+                                                          int(n_domain/2)
+                                                          )
         with torch.no_grad():
             for _ in range(200):
                 # Neural process returns distribution over y_target

@@ -37,20 +37,15 @@ def LogNormal(mean, std):
 
     return dist
 
-def sphere_extinction(wavelength, radius_mu, radius_sigma, em):
+def sphere_extinction(wavelength, em):
     e1, e2 = gold_dielectric_function(wavelength)
-    e = torch.complex(e1, e2)
 
-    factor = (e-em)/(e+2*em)
-    radius = LogNormal(radius_mu, radius_sigma*radius_mu)
-    
-    n_samples = 4096
-    radius_samples = radius.rsample((n_samples, ))
+    factor = (18 * np.pi * (em**1.5))/wavelength
+    scale = e2/((e1 + 2*em)**2 + e2**2)
 
-    scale = (4 * np.pi * (radius_samples**1.5)) / (3 * wavelength)
-    gamma = scale*factor.imag
+    gamma = scale*factor
 
-    return gamma.mean() 
+    return gamma
 
 def nanorod_extinction(wavelength, aspect_ratio_mu, aspect_ratio_sigma, em):
     aspect_ratio = LogNormal(aspect_ratio_mu, aspect_ratio_sigma*aspect_ratio_mu)
@@ -75,10 +70,11 @@ def nanorod_extinction(wavelength, aspect_ratio_mu, aspect_ratio_sigma, em):
     return ext      
 
 def fit_mie_scattering(objective, design_space_bounds, **kwargs):
-    n_iterations = kwargs.get("n_iterations", 1000)
+    n_iterations = kwargs.get("n_iterations", 100)
     n_restarts = kwargs.get("n_restarts", 100)
     epsilon = kwargs.get("epsilon", 0.1)
     lr = kwargs.get("lr", 0.01)
+    start = time.time()
 
     bounds = torch.tensor(design_space_bounds).transpose(-1, -2)
     samples = draw_sobol_samples(bounds=bounds, n=n_restarts, q=1).view(n_restarts, len(design_space_bounds))
@@ -96,11 +92,11 @@ def fit_mie_scattering(objective, design_space_bounds, **kwargs):
     X.requires_grad_(True)
     optimizer = torch.optim.Adam([X], lr=lr)
     
-    start = time.time()
+    best_error = np.inf
     for j in range(n_iterations):
         optimizer.zero_grad()
         loss = objective(X)
-        loss.backward() 
+        loss.backward()
         optimizer.step()
 
         # clamp values to the feasible set
@@ -115,9 +111,9 @@ def fit_mie_scattering(objective, design_space_bounds, **kwargs):
             best_X = X.clone().detach()
             print("Error threshold of %.2f reached."%best_error)
             break
-        else:
+        elif loss.item()<best_error:
             best_error = loss.item()
-            best_X = X.clone().detach()       
+            best_X = X.clone().detach()
 
     end = time.time()
     time_str =  str(datetime.timedelta(seconds=end-start)) 

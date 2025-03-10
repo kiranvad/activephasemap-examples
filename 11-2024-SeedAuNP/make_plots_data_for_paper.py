@@ -144,8 +144,6 @@ def get_accuracy(comps, domain, spectra, comp_model, np_model):
     for i in range(comps.shape[0]):
         mu_i, _ = from_comp_to_spectrum(domain, comps[i,:], comp_model, np_model)
         mu_i_np = mu_i.cpu().squeeze().numpy()
-        mu_i_norm = (mu_i_np - min(mu_i_np))/(max(mu_i_np)-min(mu_i_np))
-        spectra_i_norm =  (spectra[i,:] - min(spectra[i,:]))/(max(spectra[i,:])-min(spectra[i,:]))
         amplitude, phase = weighted_amplitude_phase(domain, spectra[i,:], mu_i_np)
         loss.append(0.5*(amplitude+phase))
 
