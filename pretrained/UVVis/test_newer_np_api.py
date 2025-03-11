@@ -12,7 +12,7 @@ from activephasemap.models.np import NeuralProcess, train_neural_process
 sys.path.append('/mmfs1/home/kiranvad/cheme-kiranvad/activephasemap-examples/pretrained/')
 from helpers import *
 
-PLOT_DIR = './test_np_new_api/'
+PLOT_DIR = './03102025/'
 if os.path.exists(PLOT_DIR):
     shutil.rmtree(PLOT_DIR)
 os.makedirs(PLOT_DIR)
@@ -26,8 +26,8 @@ z_dim = config["z_dim"]  # Dimension of sampled latent variable
 h_dim = config["h_dim"]  # Dimension of hidden layers in encoder and decoder
 learning_rate = config["lr"]
 
-num_epochs = 500
-plot_epochs_freq = 100
+num_epochs = 100
+plot_epochs_freq = 10
 print_itr_freq = 1000
 
 # Create dataset
