@@ -4,7 +4,7 @@
 #SBATCH --partition=ckpt-all
 #SBATCH --nodes=1
 ##SBATCH --gpus=1
-#SBATCH --time=12:00:00
+#SBATCH --time=1:00:00
 #SBATCH --output=./slurm/%j.out
 #SBATCH --error=./slurm/%j.err
 #SBATCH --mail-user=kiranvad@uw.edu
