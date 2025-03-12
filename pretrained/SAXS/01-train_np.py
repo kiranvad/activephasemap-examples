@@ -22,8 +22,8 @@ z_dim = 4  # Dimension of sampled latent variable
 h_dim = 128  # Dimension of hidden layers in encoder and decoder
 learning_rate = 1e-3
 
-num_epochs = 500
-plot_epochs_freq = 50
+num_epochs = 100
+plot_epochs_freq = 10
 print_itr_freq = 1000
 use_log_scale = True 
 
