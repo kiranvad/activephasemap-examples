@@ -16,47 +16,48 @@ if os.path.exists(PLOT_DIR):
     shutil.rmtree(PLOT_DIR)
 os.makedirs(PLOT_DIR)
 
-batch_size = 4
-r_dim = 32  # Dimension of representation of context points
-z_dim = 16  # Dimension of sampled latent variable
-h_dim = 64  # Dimension of hidden layers in encoder and decoder
+batch_size = 2
+r_dim = 16  # Dimension of representation of context points
+z_dim = 8  # Dimension of sampled latent variable
+h_dim = 128  # Dimension of hidden layers in encoder and decoder
 learning_rate = 1e-3
 
-num_epochs = 100
-plot_epochs_freq = 10
+num_epochs = 500
+plot_epochs_freq = 100
 print_itr_freq = 1000
 use_log_scale = True 
 
 # Create dataset
-dataset = SAXSDataSet(root_dir='/mmfs1/home/kiranvad/cheme-kiranvad/sas-55m-20k', 
-                      n_sub_sample=250, 
-                      )
-data_loader = DataLoader(dataset, batch_size=batch_size, shuffle=True,
-collate_fn=lambda x: tuple(x_.to(device) for x_ in default_collate(x))
-)
+# dataset = SAXSPorod(root_dir='/mmfs1/home/kiranvad/cheme-kiranvad/sas-55m-20k',  n_sub_sample=250)
+dataset = SAXSLogLog(root_dir='/mmfs1/home/kiranvad/cheme-kiranvad/activephasemap-examples/pretrained/SAXS/')
+
+data_loader = DataLoader(dataset, 
+                         batch_size=batch_size, shuffle=True,
+                         collate_fn=lambda x: tuple(x_.to(device) for x_ in default_collate(x))
+                        )
+
 x, y = next(iter(data_loader))
 print('Batch data shape for training : ', x.shape, y.shape)
 
 # Visualize data samples
-fig, axs = plt.subplots(1,2, figsize=(4*2, 4))
-for i in np.random.randint(len(dataset), size=100):
-    xi, yi = dataset[i]
-    pr = yi.cpu().squeeze().numpy()
-    Iq = dataset.convert_to_intensity(pr)
-    axs[0].plot(dataset.r, pr, c='tab:blue', alpha=0.5)
-    axs[1].loglog(dataset.q, Iq, c='tab:blue', alpha=0.5)
-
+fig, ax = plot_dataset_samples(dataset)
 plt.savefig(PLOT_DIR+'data_samples.png')
 plt.close()
 
 neuralprocess = NeuralProcess(r_dim, z_dim, h_dim).to(device)
 # Create a set of 100 target points, with shape 
 # (batch_size, num_points, x_dim), which in this case is (1, 100, 1)
-x_target = torch.linspace(0, 1, dataset.nr).reshape(1,dataset.nr,1).to(device)
+x_target = torch.linspace(dataset.xrange[0], 
+                          dataset.xrange[1], 
+                          dataset.n_domain
+                          ).reshape(1, dataset.n_domain, 1).to(device)
 
 with torch.no_grad():
-    fig, axs = plt.subplots(1,2, figsize=(4*2, 4))
-    plot_samples(axs, dataset, neuralprocess, x_target, z_dim)
+    if isinstance(dataset, SAXSLogLog):
+        fig, ax = plt.subplots()
+    else:
+        fig, ax = plt.subplots(1,2, figsize=(4*2, 4))
+    plot_samples(ax, dataset, neuralprocess, x_target, z_dim)
     plt.savefig(PLOT_DIR+'samples_before_training.png')
     plt.close()
 
@@ -70,8 +71,11 @@ for epoch in range(num_epochs+1):
     if (epoch)%plot_epochs_freq==0:
         torch.save(neural_process.state_dict(), PLOT_DIR+"model.pt")
         with torch.no_grad():
-            fig, axs = plt.subplots(1,2, figsize=(4*2, 4))
-            plot_samples(axs, dataset, neural_process, x_target, z_dim)
+            if isinstance(dataset, SAXSLogLog):
+                fig, ax = plt.subplots()
+            else:
+                fig, ax = plt.subplots(1,2, figsize=(4*2, 4))
+            plot_samples(ax, dataset, neural_process, x_target, z_dim)
             plt.savefig(PLOT_DIR+'itr_%d.png'%(epoch))
             plt.close()
 
@@ -91,8 +95,11 @@ with torch.no_grad():
     plt.close()
 
     # Plot samples from the trained model
-    fig, axs = plt.subplots(1,2, figsize=(4*2, 4))
-    plot_samples(axs, dataset, neuralprocess, x_target, z_dim)
+    if isinstance(dataset, SAXSLogLog):
+        fig, ax = plt.subplots()
+    else:
+        fig, ax = plt.subplots(1,2, figsize=(4*2, 4))
+    plot_samples(ax, dataset, neuralprocess, x_target, z_dim)
     plt.savefig(PLOT_DIR+'samples_after_training.png')
     plt.close()
 
