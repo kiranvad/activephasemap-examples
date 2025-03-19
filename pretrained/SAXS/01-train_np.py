@@ -20,6 +20,7 @@ batch_size = 2
 r_dim = 16  # Dimension of representation of context points
 z_dim = 8  # Dimension of sampled latent variable
 h_dim = 128  # Dimension of hidden layers in encoder and decoder
+n_blocks = 5 # Number of neural network layers in each encoder and decoder
 learning_rate = 1e-3
 
 num_epochs = 500
@@ -44,7 +45,7 @@ fig, ax = plot_dataset_samples(dataset)
 plt.savefig(PLOT_DIR+'data_samples.png')
 plt.close()
 
-neuralprocess = NeuralProcess(r_dim, z_dim, h_dim).to(device)
+neuralprocess = NeuralProcess(r_dim, z_dim, h_dim, n_blocks).to(device)
 # Create a set of 100 target points, with shape 
 # (batch_size, num_points, x_dim), which in this case is (1, 100, 1)
 x_target = torch.linspace(dataset.xrange[0], 
