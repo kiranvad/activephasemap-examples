@@ -30,7 +30,7 @@ use_log_scale = True
 
 # Create dataset
 # dataset = SAXSPorod(root_dir='/mmfs1/home/kiranvad/cheme-kiranvad/sas-55m-20k',  n_sub_sample=250)
-dataset = SAXSLogLog(root_dir='/mmfs1/home/kiranvad/cheme-kiranvad/activephasemap-examples/pretrained/SAXS/')
+dataset = SAXSPorod(root_dir='/mmfs1/home/kiranvad/cheme-kiranvad/activephasemap-examples/pretrained/SAXS/')
 
 data_loader = DataLoader(dataset, 
                          batch_size=batch_size, shuffle=True,
