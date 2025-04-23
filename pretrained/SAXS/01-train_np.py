@@ -17,16 +17,15 @@ if os.path.exists(PLOT_DIR):
 os.makedirs(PLOT_DIR)
 
 batch_size = 2
-r_dim = 16  # Dimension of representation of context points
+r_dim = 128  # Dimension of representation of context points
 z_dim = 8  # Dimension of sampled latent variable
 h_dim = 128  # Dimension of hidden layers in encoder and decoder
 n_blocks = 5 # Number of neural network layers in each encoder and decoder
 learning_rate = 1e-3
 
 num_epochs = 500
-plot_epochs_freq = 100
+plot_epochs_freq = 50
 print_itr_freq = 1000
-use_log_scale = True 
 
 # Create dataset
 # dataset = SAXSPorod(root_dir='/mmfs1/home/kiranvad/cheme-kiranvad/sas-55m-20k',  n_sub_sample=250)
