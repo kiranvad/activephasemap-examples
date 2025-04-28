@@ -7,7 +7,7 @@ import glob, pdb
 import matplotlib.pyplot as plt
 
 from activephasemap.models.np import context_target_split
-from activephasemap.utils import _inset_spectra
+from activephasemap.utils import inset_spectra
 from activephasemap.simulators import MinMaxScaler, scaled_tickformat
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -109,7 +109,7 @@ def plot_zgrid_curves(z_range, x_target, model):
             norm_zij = np.array([scaler.transform(z[i].cpu().numpy()), 
                                 scaler.transform(z[j].cpu().numpy())]
                                 )
-            _inset_spectra(norm_zij,x_target.cpu().squeeze().numpy(),
+            inset_spectra(norm_zij,x_target.cpu().squeeze().numpy(),
             yi.cpu().squeeze().numpy(), [], ax, show_sigma=False)
 
     ax.xaxis.set_major_formatter(lambda x, pos : scaled_tickformat(scaler, x, pos))
