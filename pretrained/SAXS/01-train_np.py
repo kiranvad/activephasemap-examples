@@ -131,14 +131,14 @@ with torch.no_grad():
     else:
         fig, ax = plt.subplots(1,2, figsize=(4*2, 4))
     plot_samples(ax, dataset, neuralprocess, x_target, z_dim)
-    plt.savefig(PLOT_DIR+'samples_after_training.png')
     plt.title("Mean training loss : %2.4f"%loss_value)
+    plt.savefig(PLOT_DIR+'samples_after_training.png')
     plt.close()
 
     # Plot curve fitting-like samples from posteriors
     plot_posterior_samples(x_target, dataset, neuralprocess)
-    plt.savefig(PLOT_DIR+'samples_from_posterior.png')
     plt.title("Mean MSE on evaluation : %2.4f"%eval_loss)
+    plt.savefig(PLOT_DIR+'samples_from_posterior.png')
     plt.close()
 
 

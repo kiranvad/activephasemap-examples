@@ -40,7 +40,7 @@ np_model = NeuralProcess(best_np_config["r_dim"],
                             ).to(device)
 model_path = "/mmfs1/home/kiranvad/cheme-kiranvad/activephasemap-examples/pretrained/SAXS/01b/model.pt"
 np_model.load_state_dict(torch.load(model_path, map_location=device, weights_only=True))
-np_model_args = {"num_iterations": 500, 
+np_model_args = {"num_iterations": 100, 
                 "verbose":50, 
                 "lr":best_np_config["lr"], 
                 "batch_size": best_np_config["batch_size"]
@@ -157,7 +157,7 @@ with torch.no_grad():
     ax = axs[1]
     ax.xaxis.set_major_formatter(lambda x, pos : scaled_tickformat(scaler_x, x, pos))
     ax.yaxis.set_major_formatter(lambda y, pos : scaled_tickformat(scaler_y, y, pos))
-    C_grid = get_twod_grid(10, bounds_np_2d)
+    C_grid = get_twod_grid(8, bounds_np_2d)
 
     for ci in C_grid:
         t_star = np.linspace(expt.t.min(), expt.t.max(), expt.n_domain)
