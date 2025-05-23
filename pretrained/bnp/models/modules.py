@@ -4,6 +4,7 @@ import torch.nn.functional as F
 from torch.distributions import Normal
 
 from models.attention import MultiHeadAttn, SelfAttn
+import numpy as np 
 
 __all__ = ['PoolingEncoder', 'CrossAttnEncoder', 'Decoder']
 
@@ -35,7 +36,7 @@ class PoolingEncoder(nn.Module):
                 post_depth)
 
     def forward(self, xc, yc, mask=None):
-        out = self.net_pre(torch.cat([xc, yc], -1))
+        out = self.net_pre(torch.cat([xc, yc], 2))
         if mask is None:
             out = out.mean(-2)
         else:
@@ -109,3 +110,63 @@ class Decoder(nn.Module):
         mu, sigma = out.chunk(2, -1)
         sigma = 0.1 + 0.9 * F.softplus(sigma)
         return Normal(mu, sigma)
+
+class PositionEmbedder(nn.Module):
+    def __init__(self, basis = "fourier", n_freq=32, sigma=1, n_latents = 8):
+        super(PositionEmbedder, self).__init__()
+
+        if basis=="bessel":
+            self.basis = self.bessel_functions_basis 
+            self.n_basis = 3
+        else:
+            self.basis = self.fourier_basis
+            self.n_basis = 2
+
+        self.n_freq = n_freq
+        self.sigma = sigma 
+        self.n_latents = n_latents
+
+        self.freq = nn.Linear(in_features=1, out_features=self.n_freq)
+        with torch.no_grad(): # fix these weights
+            wts = torch.normal(mean=0,std=self.sigma, size=(self.n_freq, 1))
+            self.freq.weight = nn.Parameter(torch.exp(wts), requires_grad=False)
+            self.freq.bias = nn.Parameter(torch.zeros(self.n_freq), requires_grad=False)
+
+        self.layers = nn.Sequential(
+            nn.Linear(self.n_basis*self.n_freq, 128),
+            nn.ReLU(),
+            nn.Linear(128, self.n_latents)
+        )
+
+        return
+    
+    def forward(self, x):
+        nb, ns, _ = x.shape
+        xn = self.normalize(x)
+        xf = self.freq(xn)
+        xb = self.basis(xf)
+        xe = self.layers(xb)
+
+        return xe
+
+    def normalize(self, x):
+        lower, upper = x.min(1, keepdim=True)[0], x.max(1, keepdim=True)[0]
+
+        return (x-lower)/(upper-lower)
+    
+    def unnormalize(self, x, lower, upper):
+
+        return (upper-lower)*x+lower
+
+    def bessel_functions_basis(self, x):
+        eps = 1e-4
+        x = self.unnormalize(x, 0.01, 20.0)
+        j0 = torch.sin(x)/(x+eps)
+        j1 = ( torch.sin(x)/(x**2 + eps) ) - (torch.cos(x)/(x+eps))
+        j2 = ( (3.0/x**2) - 1.0 )*torch.sin(x)/(x+eps) - (3*torch.cos(x)/(x**2+eps))
+ 
+        return torch.cat([j0, j1, j2], dim=-1)
+
+    def fourier_basis(self, x):
+        x = self.unnormalize(x, -0.5, 0.5)
+        return torch.cat([torch.sin(2 * np.pi * x), torch.cos(2 * np.pi * x)], dim=-1)

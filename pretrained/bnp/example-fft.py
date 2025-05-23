@@ -4,7 +4,7 @@ import matplotlib.pyplot as plt
 import numpy as np 
 
 from data.gp import *
-from data.saxs import SAXS
+from data.saxs import SAXSFFT
 from utils.log import RunningAverage
 from models.modules import PositionEmbedder
 
@@ -12,7 +12,7 @@ device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 torch.set_default_dtype(torch.double)
 from utils.misc import load_module
 
-config = {"model_name" : "anp",
+config = {"model_name" : "np",
         "sampler_name" : "saxs",
         "pos_n_freq" : 64,
         "pos_sigma" : 1.0,
@@ -30,7 +30,7 @@ config = {"model_name" : "anp",
         "plot_num_ctx":25
 }
 
-PLOT_DIR = './plots/%s-%s'%(config["sampler_name"], config["model_name"])
+PLOT_DIR = './plots/fft-%s-%s'%(config["sampler_name"], config["model_name"])
 if os.path.exists(PLOT_DIR):
     shutil.rmtree(PLOT_DIR)
 os.makedirs(PLOT_DIR)
@@ -38,26 +38,15 @@ os.makedirs(PLOT_DIR)
 model_cls = getattr(load_module(f'models/{config["model_name"]}.py'), config["model_name"].upper())
 with open(f'configs/{config["model_name"]}.yaml', 'r') as f:
     model_config = yaml.safe_load(f)
-emb = PositionEmbedder(n_freq=config["pos_n_freq"], 
-                       sigma=config["pos_sigma"], 
-                       n_latents = config["pos_n_latents"]
-                    )
-model = model_cls(emb, **model_config).to(device)
 
-if config["sampler_name"] =="gp":
-    sampler = GPSampler(Matern52Kernel(), 
-                        config["sampler_xrange"], 
-                        n_domain=config["sampler_n_domain"], 
-                        device=device
-                        )
-elif config["sampler_name"] =="saxs":
-    sampler = SAXS(root_dir='/mmfs1/home/kiranvad/cheme-kiranvad/activephasemap-examples/pretrained/SAXS/', device=device) 
-else:
-    print("Sampler %s is not recognized"%config["sampler_name"])
+model_config.update(dim_y = 2)
+model = model_cls(None, **model_config).to(device)
+print(model_config)
 
+sampler = SAXSFFT(root_dir='../SAXS/', device=device)
 optimizer = torch.optim.Adam(model.parameters(), lr=config["lr"])
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-        optimizer, T_max=config["num_steps"])
+    optimizer, T_max=config["num_steps"])
 
 def eval(args, sampler, model):
     batches = []
@@ -75,18 +64,21 @@ def eval(args, sampler, model):
     print("Evaluation mode : ", ravg.info())
 
 def tnp(x):
-    return x.squeeze().cpu().data.numpy()
+    amp_zero = x[0,0] + 1j*x[0,1]
+    amp_pos = x[1:,0]+ 1j*x[1:,1] 
+    amp_neg = torch.flip(amp_pos, [0])
+    full_amps = torch.cat([amp_zero.unsqueeze(0), amp_pos, amp_neg, amp_zero.unsqueeze(0)])
+    x_inv = torch.fft.ifft(full_amps).real
+    return x_inv.squeeze().cpu().data.numpy()
 
 def plot(args, batch, sampler, model):
-    xp = torch.linspace(sampler.xrange[0], 
-                        sampler.xrange[1], 
-                        sampler.n_domain
-                    ).to(device)
     model.eval()
     with torch.no_grad():
-        py = model.predict(batch.xc, batch.yc,
-                xp[None,:,None].repeat(args["plot_batch_size"], 1, 1),
-                num_samples=args["num_samples"])
+        py = model.predict(batch.xc, 
+                           batch.yc,
+                           batch.x.clone(),
+                           num_samples=args["num_samples"]
+                        )
         mu, sigma = py.mean.squeeze(0), py.scale.squeeze(0)
 
     if args["plot_batch_size"] > 1:
@@ -99,38 +91,26 @@ def plot(args, batch, sampler, model):
         fig = plt.figure(figsize=(5, 5))
         axs = [plt.gca()]
 
-    if mu.dim() == 4: # multi sample
-        for i, ax in enumerate(axs):
-            for s in range(mu.shape[0]):
-                ax.plot(tnp(xp), tnp(mu[s][i]), color='steelblue',
-                        alpha=max(0.5/args["num_samples"], 0.1))
-                ax.fill_between(tnp(xp), tnp(mu[s][i])-tnp(sigma[s][i]),
-                        tnp(mu[s][i])+tnp(sigma[s][i]),
-                        color='skyblue',
-                        alpha=max(0.2/args["num_samples"], 0.02),
-                        linewidth=0.0)
-
-            mse = ((py.mean[:,i,:,:]-torch.stack([batch.y[i]]*args["num_samples"]))**2).sum(-1).mean()
-            ax.set_title("MSE : %.2f"%mse)
-            ax.plot(tnp(batch.x[i]), tnp(batch.y[i]), zorder=mu.shape[0]+2)
-            ax.scatter(tnp(batch.xc[i]), tnp(batch.yc[i]),
-                    color='k', label='context', zorder=mu.shape[0]+1)
-            ax.scatter(tnp(batch.xt[i]), tnp(batch.yt[i]),
-                    color='orchid', label='target',
-                    zorder=mu.shape[0]+1)
-            ax.legend()
-    else:
-        for i, ax in enumerate(axs):
-            ax.plot(tnp(xp), tnp(mu[i]), color='steelblue', alpha=0.5)
-            ax.fill_between(tnp(xp), tnp(mu[i]-sigma[i]), tnp(mu[i]+sigma[i]),
-                    color='skyblue', alpha=0.2, linewidth=0.0)
-            ax.scatter(tnp(batch.xc[i]), tnp(batch.yc[i]),
-                    color='k', label='context')
-            ax.plot(tnp(batch.x[i]), tnp(batch.y[i]), 
-                    zorder=mu.shape[0]+2)
-            ax.scatter(tnp(batch.xt[i]), tnp(batch.yt[i]),
-                    color='orchid', label='target')
-            ax.legend()
+    for i, ax in enumerate(axs):
+        for s in range(mu.shape[0]):
+            ax.plot(sampler.q_grid, 
+                    tnp(mu[s][i]), 
+                    color='steelblue',
+                    alpha=max(0.5/args["num_samples"], 0.1)
+                )
+            ax.fill_between(sampler.q_grid, 
+                    tnp(mu[s][i])-tnp(sigma[s][i]),
+                    tnp(mu[s][i])+tnp(sigma[s][i]),
+                    color='skyblue',
+                    alpha=max(0.2/args["num_samples"], 0.02),
+                    linewidth=0.0
+                )
+        pdb.set_trace()
+        ax.plot(sampler.q_grid, 
+                tnp(batch.y[i]), 
+                zorder=mu.shape[0]+2,
+                color = "k"
+                )
 
     plt.tight_layout()
 

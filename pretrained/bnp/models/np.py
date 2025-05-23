@@ -6,9 +6,11 @@ import attridict
 from utils.misc import stack, logmeanexp
 from utils.sampling import sample_subset
 from models.modules import PoolingEncoder, Decoder
+import pdb 
 
 class NP(nn.Module):
     def __init__(self,
+            emb,
             dim_x=1,
             dim_y=1,
             dim_hid=128,
@@ -19,15 +21,22 @@ class NP(nn.Module):
 
         super().__init__()
 
+        if emb is None:
+            dim_x_aug = dim_x 
+            self.emb = nn.Identity()
+        else:
+            dim_x_aug = emb.n_latents
+            self.emb = emb 
+
         self.denc = PoolingEncoder(
-                dim_x=dim_x,
+                dim_x=dim_x_aug,
                 dim_y=dim_y,
                 dim_hid=dim_hid,
                 pre_depth=enc_pre_depth,
                 post_depth=enc_post_depth)
 
         self.lenc = PoolingEncoder(
-                dim_x=dim_x,
+                dim_x=dim_x_aug,
                 dim_y=dim_y,
                 dim_hid=dim_hid,
                 dim_lat=dim_lat,
@@ -35,13 +44,15 @@ class NP(nn.Module):
                 post_depth=enc_post_depth)
 
         self.dec = Decoder(
-                dim_x=dim_x,
+                dim_x=dim_x_aug,
                 dim_y=dim_y,
                 dim_enc=dim_hid+dim_lat,
                 dim_hid=dim_hid,
                 depth=dec_depth)
 
     def predict(self, xc, yc, xt, z=None, num_samples=None):
+        xc = self.emb(xc)
+        xt = self.emb(xt)
         theta = stack(self.denc(xc, yc), num_samples)
         if z is None:
             pz = self.lenc(xc, yc)
@@ -54,8 +65,8 @@ class NP(nn.Module):
     def forward(self, batch, num_samples=None, reduce_ll=True):
         outs = attridict()
         if self.training:
-            pz = self.lenc(batch.xc, batch.yc)
-            qz = self.lenc(batch.x, batch.y)
+            pz = self.lenc(self.emb(batch.xc), batch.yc)
+            qz = self.lenc(self.emb(batch.x), batch.y)
             z = qz.rsample() if num_samples is None else \
                     qz.rsample([num_samples])
             py = self.predict(batch.xc, batch.yc, batch.x,
