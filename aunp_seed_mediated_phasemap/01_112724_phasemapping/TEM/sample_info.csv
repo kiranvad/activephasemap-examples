@@ -1,0 +1,21 @@
+,well_name,label,notes
+0,A1,sphere,retrosynthesis target
+1,A2,rod,retrosynthesis target
+2,A3,seed,
+3,A4,seed,
+4,A5,mix-seed-sphere,
+5,A6,mix-seed-rod,
+6,A7,rods,
+7,A8,pd-rods,
+8,A9,pd-rods,
+9,A10,md-rods,
+10,A11,sphere,
+11,A12,sphere,
+12,B1,mix-sphere-rod,
+13,B2,pd-rod,
+14,B3,pd-rods,repeats of A8 for TEM
+15,B4,pd-rods,repeats of A9 for TEM
+16,B5,md-rods,repeats of A10 for TEM
+17,B6,pd-rods,repeats of A8 for Centrifuge
+18,B7,pd-rods,repeats of A9 for Centrifuge
+19,B8,md-rods,repeats of A10 for Centrifuge
